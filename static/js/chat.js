@@ -1735,8 +1735,8 @@ export class ChatManager {
             }
         }
 
-        // Error
-        if (data.message !== undefined && data.content === undefined && !data.cancelled) {
+        // Error (but not info/warning events)
+        if (data.message !== undefined && data.content === undefined && !data.cancelled && data.type !== 'info' && data.type !== 'warning') {
             this.appendToAssistantMessage(`\n\nError: ${data.message}`);
         }
 
