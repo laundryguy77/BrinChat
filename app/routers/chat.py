@@ -1514,7 +1514,8 @@ async def chat(request: Request, user: UserResponse = Depends(require_auth)):
             # Clear cancellation tracking
             clear_cancellation(conv_id)
 
-    return EventSourceResponse(event_generator())
+    # ping=15 sends SSE comment every 15s to keep mobile connections alive
+    return EventSourceResponse(event_generator(), ping=15)
 
 
 @router.get("/conversations")
@@ -1985,7 +1986,8 @@ async def regenerate_response(
             # Clear cancellation tracking
             clear_cancellation(conv_id)
 
-    return EventSourceResponse(event_generator())
+    # ping=15 sends SSE comment every 15s to keep mobile connections alive
+    return EventSourceResponse(event_generator(), ping=15)
 
 
 # Legacy endpoints for backward compatibility
