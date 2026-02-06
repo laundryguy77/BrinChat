@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Portal - BrinChat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Noto+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#144bb8",
+                        "primary-hover": "#0f3991",
+                        "accent-red": "#7f1d1d",
+                        "accent-orange": "#c2410c",
+                        "background-dark": "#0f172a",
+                        "surface-dark": "#1e293b",
+                        "surface-darker": "#162032",
+                        "sidebar-dark": "#0b101b"
+                    },
+                    fontFamily: {
+                        "display": ["Space Grotesk", "sans-serif"],
+                        "body": ["Noto Sans", "sans-serif"],
+                    },
+                },
+            },
+        }
+    </script>
+    <style>
+        :root {
+            --bg-primary: #0f172a;
+            --bg-surface: #1e293b;
+            --bg-sidebar: #0b101b;
+            --text-primary: #ffffff;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --border-color: #334155;
+            --accent-primary: #144bb8;
+        }
+
+        body { background-color: var(--bg-primary); color: var(--text-primary); }
+
+        .admin-nav-item {
+            @apply flex items-center gap-2 px-4 py-3 text-sm font-medium rounded-lg transition-colors cursor-pointer;
+        }
+        .admin-nav-item:hover {
+            @apply bg-slate-700/50;
+        }
+        .admin-nav-item.active {
+            @apply bg-primary text-white;
+        }
+
+        .stat-card {
+            @apply bg-surface-dark rounded-xl p-6 border border-slate-700/50;
+        }
+        .stat-value {
+            @apply text-3xl font-bold text-white;
+        }
+        .stat-label {
+            @apply text-sm text-slate-400 mt-1;
+        }
+
+        .data-table {
+            @apply w-full text-sm;
+        }
+        .data-table th {
+            @apply text-left px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wider bg-slate-800/50;
+        }
+        .data-table td {
+            @apply px-4 py-3 border-t border-slate-700/50;
+        }
+        .data-table tr:hover td {
+            @apply bg-slate-800/30;
+        }
+
+        .badge {
+            @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium;
+        }
+        .badge-success {
+            @apply bg-green-500/20 text-green-400;
+        }
+        .badge-warning {
+            @apply bg-amber-500/20 text-amber-400;
+        }
+        .badge-danger {
+            @apply bg-red-500/20 text-red-400;
+        }
+        .badge-info {
+            @apply bg-blue-500/20 text-blue-400;
+        }
+
+        .btn {
+            @apply inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors;
+        }
+        .btn-primary {
+            @apply bg-primary hover:bg-primary-hover text-white;
+        }
+        .btn-secondary {
+            @apply bg-slate-700 hover:bg-slate-600 text-white;
+        }
+        .btn-danger {
+            @apply bg-red-600 hover:bg-red-700 text-white;
+        }
+        .btn-sm {
+            @apply px-3 py-1.5 text-xs;
+        }
+
+        .form-input {
+            @apply w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-400 focus:border-primary focus:ring-1 focus:ring-primary;
+        }
+        .form-label {
+            @apply block text-sm font-medium text-slate-300 mb-1;
+        }
+
+        .modal-overlay {
+            @apply fixed inset-0 bg-black/50 flex items-center justify-center z-50;
+        }
+        .modal-content {
+            @apply bg-surface-dark rounded-xl p-6 max-w-md w-full mx-4 shadow-xl;
+        }
+
+        .toggle {
+            @apply relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer;
+        }
+        .toggle.on {
+            @apply bg-primary;
+        }
+        .toggle.off {
+            @apply bg-slate-600;
+        }
+        .toggle-knob {
+            @apply inline-block h-4 w-4 transform rounded-full bg-white transition-transform;
+        }
+        .toggle.on .toggle-knob {
+            @apply translate-x-6;
+        }
+        .toggle.off .toggle-knob {
+            @apply translate-x-1;
+        }
+
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+
+        /* Toast notifications */
+        .toast-container {
+            @apply fixed top-4 right-4 z-50 flex flex-col gap-2;
+        }
+        .toast {
+            @apply px-4 py-3 rounded-lg shadow-lg text-sm font-medium animate-slide-in;
+        }
+        .toast-success {
+            @apply bg-green-600 text-white;
+        }
+        .toast-error {
+            @apply bg-red-600 text-white;
+        }
+        .toast-info {
+            @apply bg-blue-600 text-white;
+        }
+
+        @keyframes slide-in {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        .animate-slide-in {
+            animation: slide-in 0.3s ease-out;
+        }
+    </style>
+</head>
+<body class="font-body min-h-screen">
+    <!-- Toast container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Header -->
+    <header class="bg-surface-dark border-b border-slate-700/50 px-6 py-4">
+        <div class="flex items-center justify-between max-w-7xl mx-auto">
+            <div class="flex items-center gap-4">
+                <a href="/" class="text-slate-400 hover:text-white transition-colors">
+                    <span class="material-symbols-outlined">arrow_back</span>
+                </a>
+                <h1 class="text-xl font-display font-semibold">Admin Portal</h1>
+            </div>
+            <div class="flex items-center gap-4">
+                <span id="admin-username" class="text-sm text-slate-400"></span>
+                <button onclick="logout()" class="btn btn-secondary btn-sm">
+                    <span class="material-symbols-outlined text-sm">logout</span>
+                    Logout
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <div class="flex max-w-7xl mx-auto">
+        <!-- Sidebar Navigation -->
+        <nav class="w-56 p-4 border-r border-slate-700/50 min-h-[calc(100vh-73px)]">
+            <div class="space-y-1">
+                <div class="admin-nav-item active" data-tab="dashboard">
+                    <span class="material-symbols-outlined">dashboard</span>
+                    Dashboard
+                </div>
+                <div class="admin-nav-item" data-tab="users">
+                    <span class="material-symbols-outlined">group</span>
+                    Users
+                </div>
+                <div class="admin-nav-item" data-tab="features">
+                    <span class="material-symbols-outlined">toggle_on</span>
+                    Features
+                </div>
+                <div class="admin-nav-item" data-tab="themes">
+                    <span class="material-symbols-outlined">palette</span>
+                    Themes
+                </div>
+                <div class="admin-nav-item" data-tab="audit">
+                    <span class="material-symbols-outlined">history</span>
+                    Audit Log
+                </div>
+            </div>
+        </nav>
+
+        <!-- Content Area -->
+        <main class="flex-1 p-6">
+            <!-- Dashboard Tab -->
+            <div id="tab-dashboard" class="tab-content active">
+                <h2 class="text-2xl font-display font-semibold mb-6">Dashboard</h2>
+                <div id="dashboard-stats" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+                    <!-- Stats will be loaded here -->
+                </div>
+                <div class="bg-surface-dark rounded-xl p-6 border border-slate-700/50">
+                    <h3 class="text-lg font-medium mb-4">Recent Activity</h3>
+                    <div id="recent-activity" class="text-sm text-slate-400">
+                        Loading...
+                    </div>
+                </div>
+            </div>
+
+            <!-- Users Tab -->
+            <div id="tab-users" class="tab-content">
+                <div class="flex items-center justify-between mb-6">
+                    <h2 class="text-2xl font-display font-semibold">Users</h2>
+                    <button onclick="showCreateUserModal()" class="btn btn-primary">
+                        <span class="material-symbols-outlined text-sm">add</span>
+                        Create User
+                    </button>
+                </div>
+
+                <!-- Search and filters -->
+                <div class="flex gap-4 mb-4">
+                    <input type="text" id="user-search" placeholder="Search users..." class="form-input max-w-xs" oninput="debounceUserSearch()">
+                    <label class="flex items-center gap-2 text-sm text-slate-400">
+                        <input type="checkbox" id="include-inactive" onchange="loadUsers()" class="rounded bg-slate-800 border-slate-600">
+                        Include inactive
+                    </label>
+                </div>
+
+                <!-- Users table -->
+                <div class="bg-surface-dark rounded-xl border border-slate-700/50 overflow-hidden">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Username</th>
+                                <th>Email</th>
+                                <th>Status</th>
+                                <th>Role</th>
+                                <th>Created</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="users-table-body">
+                            <!-- Users will be loaded here -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Pagination -->
+                <div id="users-pagination" class="flex items-center justify-between mt-4">
+                    <!-- Pagination will be loaded here -->
+                </div>
+            </div>
+
+            <!-- Features Tab -->
+            <div id="tab-features" class="tab-content">
+                <h2 class="text-2xl font-display font-semibold mb-6">Feature Flags</h2>
+                <p class="text-sm text-slate-400 mb-6">
+                    Control which features are available to users. These are global defaults - you can set per-user overrides in the user edit modal.
+                </p>
+                <div id="features-list" class="space-y-4">
+                    <!-- Features will be loaded here -->
+                </div>
+            </div>
+
+            <!-- Themes Tab -->
+            <div id="tab-themes" class="tab-content">
+                <div class="flex items-center justify-between mb-6">
+                    <h2 class="text-2xl font-display font-semibold">Themes</h2>
+                    <button onclick="showCreateThemeModal()" class="btn btn-primary">
+                        <span class="material-symbols-outlined text-sm">add</span>
+                        Create Theme
+                    </button>
+                </div>
+                <div id="themes-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <!-- Themes will be loaded here -->
+                </div>
+            </div>
+
+            <!-- Audit Log Tab -->
+            <div id="tab-audit" class="tab-content">
+                <h2 class="text-2xl font-display font-semibold mb-6">Audit Log</h2>
+                <div class="bg-surface-dark rounded-xl border border-slate-700/50 overflow-hidden">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Admin</th>
+                                <th>Action</th>
+                                <th>Target</th>
+                                <th>Details</th>
+                                <th>IP</th>
+                            </tr>
+                        </thead>
+                        <tbody id="audit-table-body">
+                            <!-- Audit log will be loaded here -->
+                        </tbody>
+                    </table>
+                </div>
+                <div id="audit-pagination" class="flex items-center justify-between mt-4">
+                    <!-- Pagination will be loaded here -->
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Create User Modal -->
+    <div id="create-user-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <h3 class="text-lg font-semibold mb-4">Create User</h3>
+            <form id="create-user-form" onsubmit="createUser(event)">
+                <div class="space-y-4">
+                    <div>
+                        <label class="form-label">Username</label>
+                        <input type="text" name="username" required minlength="3" maxlength="50" class="form-input">
+                    </div>
+                    <div>
+                        <label class="form-label">Password</label>
+                        <input type="password" name="password" required minlength="12" class="form-input">
+                        <p class="text-xs text-slate-400 mt-1">Min 12 chars with upper, lower, digit, and special char</p>
+                    </div>
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="is_admin" class="rounded bg-slate-800 border-slate-600">
+                            <span class="text-sm">Admin user</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="flex justify-end gap-3 mt-6">
+                    <button type="button" onclick="hideModal('create-user-modal')" class="btn btn-secondary">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Edit User Modal -->
+    <div id="edit-user-modal" class="modal-overlay hidden">
+        <div class="modal-content max-w-lg">
+            <h3 class="text-lg font-semibold mb-4">Edit User</h3>
+            <form id="edit-user-form" onsubmit="updateUser(event)">
+                <input type="hidden" name="user_id" id="edit-user-id">
+                <div class="space-y-4">
+                    <div>
+                        <label class="form-label">Username</label>
+                        <input type="text" id="edit-username" class="form-input" disabled>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="form-label">Status</label>
+                            <select name="is_active" id="edit-is-active" class="form-input">
+                                <option value="true">Active</option>
+                                <option value="false">Inactive</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="form-label">Role</label>
+                            <select name="is_admin" id="edit-is-admin" class="form-input">
+                                <option value="false">User</option>
+                                <option value="true">Admin</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="form-label">Mode Restriction</label>
+                        <select name="mode_restriction" id="edit-mode-restriction" class="form-input">
+                            <option value="">No restriction</option>
+                            <option value="normal_only">Normal only (no adult mode)</option>
+                            <option value="no_full_unlock">No full unlock</option>
+                        </select>
+                    </div>
+                    <div class="border-t border-slate-700 pt-4">
+                        <h4 class="text-sm font-medium mb-3">Feature Overrides</h4>
+                        <div id="user-feature-overrides" class="space-y-2 max-h-48 overflow-y-auto">
+                            <!-- Feature overrides will be loaded here -->
+                        </div>
+                    </div>
+                </div>
+                <div class="flex justify-between mt-6">
+                    <button type="button" onclick="confirmResetPassword()" class="btn btn-secondary btn-sm">
+                        Reset Password
+                    </button>
+                    <div class="flex gap-3">
+                        <button type="button" onclick="hideModal('edit-user-modal')" class="btn btn-secondary">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Save</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Reset Password Modal -->
+    <div id="reset-password-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <h3 class="text-lg font-semibold mb-4">Reset Password</h3>
+            <form id="reset-password-form" onsubmit="resetPassword(event)">
+                <input type="hidden" name="user_id" id="reset-password-user-id">
+                <div class="space-y-4">
+                    <div>
+                        <label class="form-label">New Password</label>
+                        <input type="password" name="new_password" required minlength="12" class="form-input">
+                        <p class="text-xs text-slate-400 mt-1">Min 12 chars with upper, lower, digit, and special char</p>
+                    </div>
+                    <div>
+                        <label class="form-label">Confirm Password</label>
+                        <input type="password" name="confirm_password" required minlength="12" class="form-input">
+                    </div>
+                </div>
+                <div class="flex justify-end gap-3 mt-6">
+                    <button type="button" onclick="hideModal('reset-password-modal')" class="btn btn-secondary">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Reset</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Create Theme Modal -->
+    <div id="create-theme-modal" class="modal-overlay hidden">
+        <div class="modal-content max-w-lg">
+            <h3 class="text-lg font-semibold mb-4">Create Theme</h3>
+            <form id="create-theme-form" onsubmit="createTheme(event)">
+                <div class="space-y-4">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="form-label">Name (ID)</label>
+                            <input type="text" name="name" required pattern="^[a-z0-9_-]+$" class="form-input" placeholder="my_theme">
+                        </div>
+                        <div>
+                            <label class="form-label">Display Name</label>
+                            <input type="text" name="display_name" required class="form-input" placeholder="My Theme">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="form-label">Description</label>
+                        <input type="text" name="description" class="form-input" placeholder="A custom theme">
+                    </div>
+                    <div>
+                        <label class="form-label">CSS Variables (JSON)</label>
+                        <textarea name="css_variables" rows="6" required class="form-input font-mono text-xs">{
+  "--bg-primary": "#0f172a",
+  "--bg-surface": "#1e293b",
+  "--text-primary": "#ffffff",
+  "--text-secondary": "#94a3b8",
+  "--accent": "#144bb8",
+  "--border": "#334155"
+}</textarea>
+                    </div>
+                </div>
+                <div class="flex justify-end gap-3 mt-6">
+                    <button type="button" onclick="hideModal('create-theme-modal')" class="btn btn-secondary">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Confirm Delete Modal -->
+    <div id="confirm-delete-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <h3 class="text-lg font-semibold mb-4">Confirm Delete</h3>
+            <p id="confirm-delete-message" class="text-slate-400 mb-6"></p>
+            <div class="flex justify-end gap-3">
+                <button onclick="hideModal('confirm-delete-modal')" class="btn btn-secondary">Cancel</button>
+                <button id="confirm-delete-btn" class="btn btn-danger">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/admin.js"></script>
+</body>
+</html>

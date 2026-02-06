@@ -1,0 +1,45 @@
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude
+.claude/
+
+# Generated content
+generated_images/
+conversations/
+
+# Environment files
+.env
+.env.local
+.env.bak
+*.env.bak
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# OS files
+.DS_Store
+Thumbs.db
+tests/ui_testing/old_findings/
+backups/backup.log
+
+# Backup files
+backups/*.tar.gz
+backups/*.gz

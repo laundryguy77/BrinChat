@@ -1,0 +1,28 @@
+[Unit]
+Description=BrinChat - Web Chat Interface for Claude via OpenClaw
+After=network.target
+
+[Service]
+Type=simple
+User=tech
+Group=tech
+WorkingDirectory=/home/tech/projects/BrinChat
+Environment="PATH=/home/tech/projects/BrinChat/venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/home/tech/projects/BrinChat/venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8081
+Restart=always
+RestartSec=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=brinchat
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/tech/projects/BrinChat
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

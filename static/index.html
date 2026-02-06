@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, interactive-widget=resizes-content">
+    <title>BrinChat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Noto+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+    <!-- Syntax highlighting theme -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css">
+    <!-- Markdown parser -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+    <!-- HTML sanitization for XSS protection -->
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+    <!-- Syntax highlighting -->
+    <script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#144bb8",
+                        "primary-hover": "#0f3991",
+                        "accent-red": "#7f1d1d",
+                        "accent-orange": "#c2410c",
+                        "background-dark": "#0f172a",
+                        "surface-dark": "#1e293b",
+                        "surface-darker": "#162032",
+                        "sidebar-dark": "#0b101b"
+                    },
+                    fontFamily: {
+                        "display": ["Space Grotesk", "sans-serif"],
+                        "body": ["Noto Sans", "sans-serif"],
+                    },
+                },
+            },
+        }
+    </script>
+    <style>
+        /* Theme CSS Variables */
+        :root {
+            --bg-primary: #0f172a;
+            --bg-surface: #1e293b;
+            --bg-sidebar: #0b101b;
+            --text-primary: #ffffff;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --border-color: #334155;
+            --accent-primary: #144bb8;
+            /* Dynamic viewport height - accounts for mobile keyboard/browser chrome */
+            --app-height: 100vh;
+        }
+
+        @supports (height: 100dvh) {
+            :root {
+                --app-height: 100dvh;
+            }
+        }
+
+        [data-theme="light"] {
+            --bg-primary: #f8fafc;
+            --bg-surface: #ffffff;
+            --bg-sidebar: #f1f5f9;
+            --text-primary: #1e293b;
+            --text-secondary: #475569;
+            --text-muted: #64748b;
+            --border-color: #e2e8f0;
+            --accent-primary: #2563eb;
+        }
+
+        [data-theme="midnight"] {
+            --bg-primary: #0d1117;
+            --bg-surface: #161b22;
+            --bg-sidebar: #010409;
+            --text-primary: #c9d1d9;
+            --text-secondary: #8b949e;
+            --text-muted: #6e7681;
+            --border-color: #30363d;
+            --accent-primary: #58a6ff;
+        }
+
+        [data-theme="forest"] {
+            --bg-primary: #0f1a0f;
+            --bg-surface: #1a2f1a;
+            --bg-sidebar: #0a120a;
+            --text-primary: #e8f5e9;
+            --text-secondary: #a5d6a7;
+            --text-muted: #66bb6a;
+            --border-color: #2e5030;
+            --accent-primary: #4caf50;
+        }
+
+        /* Apply theme colors */
+        body { background-color: var(--bg-primary); color: var(--text-primary); }
+        .theme-bg-surface { background-color: var(--bg-surface) !important; }
+        .theme-bg-sidebar { background-color: var(--bg-sidebar) !important; }
+        .theme-text-secondary { color: var(--text-secondary) !important; }
+        .theme-text-muted { color: var(--text-muted) !important; }
+        .theme-border { border-color: var(--border-color) !important; }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+        /* Animations */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fadeIn { animation: fadeIn 0.3s ease-out forwards; }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .animate-spin { animation: spin 1s linear infinite; }
+
+        /* Voice recording pulse */
+        @keyframes recordingPulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+            50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+        }
+        .recording-pulse { animation: recordingPulse 1.5s ease-in-out infinite; }
+
+        /* Voice waveform animation */
+        @keyframes waveform {
+            0%, 100% { height: 20%; }
+            50% { height: 100%; }
+        }
+
+        /* Typing indicator */
+        .typing-dot { animation: typingBounce 1.4s infinite; }
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes typingBounce {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-6px); }
+        }
+
+        /* Material symbols sizing */
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+
+        /* Code syntax highlighting tokens */
+        .token-keyword { color: #c678dd; }
+        .token-function { color: #61afef; }
+        .token-string { color: #98c379; }
+        .token-comment { color: #5c6370; font-style: italic; }
+        .token-operator { color: #56b6c2; }
+        .token-number { color: #d19a66; }
+
+        /* Textarea auto-resize helper */
+        textarea { field-sizing: content; }
+
+        /* Hide scrollbar but keep functionality */
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+        /* Enable text selection in message content */
+        .prose, .prose *, .message-content, .message-content * {
+            user-select: text;
+            -webkit-user-select: text;
+            -moz-user-select: text;
+            -ms-user-select: text;
+        }
+
+        /* Prevent horizontal overflow on mobile */
+        #message-list {
+            overflow-x: hidden;
+            max-width: 100%;
+        }
+        
+        .message-content {
+            overflow-wrap: break-word;
+            word-wrap: break-word;
+            word-break: break-word;
+            max-width: 100%;
+        }
+        
+        .message-content pre {
+            overflow-x: auto;
+            max-width: 100%;
+        }
+        
+        .message-content table {
+            display: block;
+            overflow-x: auto;
+            max-width: 100%;
+        }
+
+        /* Scroll to bottom button animation */
+        #scroll-to-bottom-btn {
+            transition: opacity 0.2s, transform 0.2s;
+        }
+        
+        #scroll-to-bottom-btn.hidden {
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(10px);
+        }
+    </style>
+</head>
+<body class="bg-background-dark text-white font-body flex overflow-hidden selection:bg-primary selection:text-white" style="height: var(--app-height);">
+    <!-- Skip to main content link for keyboard users -->
+    <a href="#message-input" class="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:bg-primary focus:text-white focus:px-4 focus:py-2 focus:rounded-lg">Skip to chat input</a>
+    
+    <!-- Screen reader announcements -->
+    <div id="sr-announcements" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+    
+    <!-- Mobile sidebar overlay -->
+    <div class="fixed inset-0 bg-black/70 z-30 hidden md:hidden" id="sidebar-overlay" role="presentation"></div>
+
+    <!-- Sidebar -->
+    <aside class="w-[280px] bg-sidebar-dark border-r border-gray-800 flex flex-col flex-shrink-0 z-40 transition-all duration-300 fixed md:relative h-full -translate-x-full md:translate-x-0" id="sidebar" data-collapsed="false" role="navigation" aria-label="Conversations">
+        <!-- Sidebar Header -->
+        <div class="h-16 px-4 flex items-center justify-between border-b border-gray-800/50">
+            <h2 class="font-display font-bold text-xl tracking-tight text-gray-100">BrinChat</h2>
+            <button class="text-gray-400 hover:text-white transition-colors hidden md:block" id="sidebar-collapse-btn" title="Collapse sidebar" aria-label="Collapse sidebar" aria-expanded="true" aria-controls="sidebar">
+                <span class="material-symbols-outlined" aria-hidden="true">dock_to_left</span>
+            </button>
+            <button class="text-gray-400 hover:text-white transition-colors md:hidden" id="sidebar-close-btn" title="Close sidebar" aria-label="Close sidebar">
+                <span class="material-symbols-outlined" aria-hidden="true">close</span>
+            </button>
+        </div>
+
+        <!-- New Chat Button -->
+        <div class="p-3">
+            <button class="flex items-center gap-3 w-full px-4 py-3 bg-primary hover:bg-primary-hover text-white rounded-xl transition-all shadow-lg shadow-primary/20" id="new-chat-btn" aria-label="Start new conversation">
+                <span class="material-symbols-outlined" aria-hidden="true">add_comment</span>
+                <span class="font-medium">New Chat</span>
+            </button>
+        </div>
+
+        <!-- Search Bar -->
+        <div class="px-3 pb-2">
+            <div class="relative">
+                <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-lg" aria-hidden="true">search</span>
+                <label for="conversation-search" class="sr-only">Search conversations</label>
+                <input type="search" id="conversation-search"
+                       class="w-full bg-surface-dark/50 border border-gray-700 rounded-lg py-2 pl-10 pr-8 text-sm text-white placeholder-gray-500 focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all"
+                       placeholder="Search conversations..."
+                       aria-describedby="search-hint">
+                <span id="search-hint" class="sr-only">Type to filter conversation list</span>
+                <button id="clear-search" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white hidden" aria-label="Clear search">
+                    <span class="material-symbols-outlined text-sm" aria-hidden="true">close</span>
+                </button>
+            </div>
+            <div id="deep-search-hint" class="hidden text-xs text-gray-500 mt-1 px-1">
+                Press <kbd class="px-1 py-0.5 bg-gray-700 rounded text-gray-300">Enter</kbd> to search within messages
+            </div>
+        </div>
+
+        <!-- Conversation List -->
+        <nav class="flex-1 overflow-y-auto px-3 py-2 space-y-1" id="conversation-list" aria-label="Conversation history" role="list">
+            <!-- Loading state -->
+            <div id="conversations-loading" class="text-center py-4 text-gray-500 text-sm">
+                <span class="material-symbols-outlined animate-spin text-primary" aria-hidden="true">progress_activity</span>
+                <span class="sr-only">Loading conversations</span>
+            </div>
+            <!-- Empty state (shown when no conversations) -->
+            <div id="conversations-empty" class="hidden text-center py-8 text-gray-500 text-sm">
+                <span class="material-symbols-outlined text-4xl mb-2 opacity-50" aria-hidden="true">chat_bubble_outline</span>
+                <p>No conversations yet</p>
+                <p class="text-xs mt-1">Start a new chat to begin</p>
+            </div>
+            <!-- Conversations loaded dynamically -->
+        </nav>
+
+        <!-- User Profile / Settings -->
+        <div class="p-4 border-t border-gray-800 bg-sidebar-dark/50 space-y-2">
+            <!-- User Info (shown when logged in) -->
+            <div id="user-info" class="hidden">
+                <div class="flex items-center gap-3 p-2">
+                    <div class="size-9 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-xs font-bold text-white shadow-inner">
+                        <span class="material-symbols-outlined text-lg">person</span>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <div class="text-sm font-medium text-white truncate" id="user-display-name">User</div>
+                        <div class="text-xs text-gray-500 truncate">Logged in</div>
+                    </div>
+                    <button id="logout-btn" class="text-gray-500 hover:text-red-400 transition-colors" title="Logout" aria-label="Sign out">
+                        <span class="material-symbols-outlined text-lg" aria-hidden="true">logout</span>
+                    </button>
+                </div>
+            </div>
+            <!-- Settings Button -->
+            <button class="flex items-center gap-3 w-full p-2 rounded-xl hover:bg-surface-dark/50 transition-colors text-left group" id="settings-btn">
+                <div class="size-9 rounded-full bg-surface-dark flex items-center justify-center text-gray-400 group-hover:text-white transition-colors">
+                    <span class="material-symbols-outlined text-lg">settings</span>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <div class="text-sm font-medium text-white truncate group-hover:text-primary transition-colors">Settings</div>
+                    <div class="text-xs text-gray-500 truncate">Preferences & Config</div>
+                </div>
+            </button>
+        </div>
+    </aside>
+
+    <!-- Floating Menu Button (shows when sidebar is collapsed) -->
+    <button class="fixed top-0 left-0 h-16 w-16 bg-sidebar-dark border-r border-b border-gray-800 text-gray-400 hover:text-white hover:bg-surface-dark/50 transition-colors z-50 hidden items-center justify-center" id="sidebar-toggle" aria-label="Open sidebar" aria-expanded="false" aria-controls="sidebar">
+        <span class="material-symbols-outlined text-2xl" aria-hidden="true">menu</span>
+    </button>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex flex-col min-w-0 bg-background-dark relative" role="main" aria-label="Chat area">
+        <!-- Header -->
+        <header class="h-16 flex items-center justify-between border-b border-gray-800 bg-background-dark/95 backdrop-blur-sm z-10 sticky top-0 px-4 md:px-6">
+            <div class="flex items-center gap-2 text-gray-400 text-sm">
+                <span class="material-symbols-outlined text-[20px]">chat_bubble</span>
+                <span class="text-gray-600">/</span>
+                <span class="text-gray-200 font-medium truncate max-w-[200px]" id="current-chat-title">New Chat</span>
+            </div>
+            <div class="flex items-center gap-2 md:gap-3">
+                <!-- Claude Badge (replaces model selector) -->
+                <div class="relative flex items-center gap-2">
+                    <div class="size-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]"></div>
+                    <button class="bg-surface-dark border border-gray-700 rounded-lg py-1.5 px-4 text-sm font-medium text-gray-200 hover:border-primary/60 hover:text-white transition-colors" id="model-badge" title="Select model">
+                        Brin (OpenClaw)
+                    </button>
+                </div>
+                <!-- Model Capability Indicators (always shown for Claude) -->
+                <div id="model-capabilities" class="flex items-center gap-1">
+                    <span id="cap-tools" class="p-1 rounded bg-surface-dark border border-gray-700" title="Tools available (web search, knowledge base)">
+                        <span class="material-symbols-outlined text-sm text-green-400">build</span>
+                    </span>
+                    <span id="cap-vision" class="p-1 rounded bg-surface-dark border border-gray-700" title="Vision capable (can analyze images)">
+                        <span class="material-symbols-outlined text-sm text-blue-400">visibility</span>
+                    </span>
+                    <span id="cap-thinking" class="p-1 rounded bg-surface-dark border border-gray-700" title="Extended thinking mode">
+                        <span class="material-symbols-outlined text-sm text-purple-400">psychology</span>
+                    </span>
+                </div>
+                <!-- Usage Gauges -->
+                <div id="usage-gauges" class="flex items-center gap-3 ml-3 pl-3 border-l border-gray-700">
+                    <!-- Context Usage -->
+                    <div class="flex items-center gap-1.5" title="Context window usage">
+                        <span class="material-symbols-outlined text-xs text-gray-500">memory</span>
+                        <div class="w-12 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                            <div id="context-gauge" class="h-full bg-primary transition-all duration-300" style="width: 0%"></div>
+                        </div>
+                        <span id="context-label" class="text-xs text-gray-500 w-7">0%</span>
+                    </div>
+                    <!-- VRAM Usage -->
+                    <div id="vram-gauge-container" class="flex items-center gap-1.5 hidden" title="GPU VRAM usage">
+                        <span class="material-symbols-outlined text-xs text-gray-500">developer_board</span>
+                        <div class="w-12 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                            <div id="vram-gauge" class="h-full bg-green-500 transition-all duration-300" style="width: 0%"></div>
+                        </div>
+                        <span id="vram-label" class="text-xs text-gray-500 w-7">0%</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Model Status Bar -->
+        <div id="model-status-bar" class="hidden px-4 py-2 bg-surface-dark/90 border-b border-gray-800/50 flex items-center justify-between gap-3 animate-fadeIn">
+            <div class="flex items-center gap-3">
+                <span id="status-icon" class="material-symbols-outlined text-primary animate-spin">progress_activity</span>
+                <div>
+                    <span id="status-text" class="text-sm text-gray-200">Generating response...</span>
+                    <span id="status-duration" class="text-xs text-gray-500 ml-2">0s</span>
+                </div>
+            </div>
+            <button id="stop-generation-btn" class="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 rounded-lg text-sm transition-colors">
+                <span class="material-symbols-outlined text-sm">stop</span>
+                Stop
+            </button>
+        </div>
+
+        <!-- Chat Container -->
+        <div class="flex-1 overflow-y-auto overflow-x-hidden scroll-smooth min-h-0" id="chat-container">
+            <div class="max-w-4xl mx-auto p-4 md:p-8 space-y-8 pb-8 transition-all duration-300" id="message-list">
+                <!-- Welcome Message -->
+                <div class="welcome-message text-center py-16 space-y-4 animate-fadeIn">
+                    <div class="size-16 rounded-2xl bg-gradient-to-br from-primary to-indigo-600 flex items-center justify-center mx-auto shadow-lg shadow-primary/30">
+                        <span class="material-symbols-outlined text-3xl text-white">smart_toy</span>
+                    </div>
+                    <h2 class="font-display font-bold text-2xl text-white">Welcome to BrinChat</h2>
+                    <p class="text-gray-400 max-w-md mx-auto">Chat with Brin — your assistant for research, debugging, planning, and getting things done.</p>
+                    <p class="text-gray-500 text-sm">Powered by OpenClaw.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Scroll to Bottom Button -->
+        <button id="scroll-to-bottom-btn" class="hidden fixed bottom-24 right-6 md:right-8 z-40 p-3 bg-primary hover:bg-primary/80 text-white rounded-full shadow-lg shadow-primary/30 transition-all duration-200 hover:scale-105 active:scale-95" title="Scroll to bottom" aria-label="Scroll to latest messages">
+            <span class="material-symbols-outlined">keyboard_arrow_down</span>
+        </button>
+
+        <!-- Input Area - Now flex-shrink-0 instead of absolute -->
+        <div class="flex-shrink-0 p-4 md:p-6 bg-gradient-to-t from-background-dark via-background-dark/95 to-background-dark/80 border-t border-gray-800/50" id="input-area">
+            <div class="max-w-4xl mx-auto transition-all duration-300" id="input-container">
+                <!-- File Previews -->
+                <div id="file-previews" class="flex gap-2 mb-2 flex-wrap"></div>
+                <!-- Image Previews -->
+                <div id="image-previews" class="flex gap-2 mb-2 flex-wrap"></div>
+
+                <!-- Input Box -->
+                <div class="relative flex flex-col bg-surface-dark/90 backdrop-blur-xl rounded-2xl border border-gray-700 shadow-2xl focus-within:ring-2 focus-within:ring-primary/50 focus-within:border-primary/50 transition-all p-1">
+                    <!-- Top Row: Plus button, textarea, send button -->
+                    <div class="flex items-end gap-2">
+                        <!-- Plus/Attach Button with Menu -->
+                        <div class="relative" id="tools-menu-container">
+                            <button type="button" class="p-3 text-gray-400 hover:text-white hover:bg-white/10 rounded-xl transition-colors" id="tools-btn" title="Attach files & options">
+                                <span class="material-symbols-outlined">add_circle</span>
+                            </button>
+                            <!-- Tools Menu -->
+                            <div id="tools-menu" class="hidden absolute bottom-full left-0 mb-2 w-64 bg-surface-dark border border-gray-700 rounded-xl shadow-2xl overflow-hidden z-50">
+                                <div class="p-2 space-y-1">
+                                    <button class="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg hover:bg-white/5 transition-colors text-left" id="menu-attach-files">
+                                        <span class="material-symbols-outlined text-primary">attach_file</span>
+                                        <div>
+                                            <div class="text-sm font-medium text-white">Add files</div>
+                                            <div class="text-xs text-gray-500">Images, PDFs, code files</div>
+                                        </div>
+                                    </button>
+                                    <button class="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg hover:bg-white/5 transition-colors text-left" id="menu-thinking">
+                                        <span class="material-symbols-outlined text-primary">psychology</span>
+                                        <div class="flex-1">
+                                            <div class="text-sm font-medium text-white">Thinking mode</div>
+                                            <div class="text-xs text-gray-500">Extended reasoning</div>
+                                        </div>
+                                        <div class="relative">
+                                            <input type="checkbox" id="thinking-checkbox" class="sr-only peer">
+                                            <div class="w-9 h-5 bg-gray-700 rounded-full peer peer-checked:bg-primary transition-colors"></div>
+                                            <div class="absolute top-0.5 left-0.5 w-4 h-4 bg-gray-400 rounded-full peer-checked:translate-x-4 peer-checked:bg-white transition-all"></div>
+                                        </div>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Hidden file inputs -->
+                        <input type="file" id="image-upload" accept="image/*" multiple hidden>
+                        <input type="file" id="file-upload" accept="image/*,.pdf,.zip,.txt,.md,.json,.xml,.csv,.py,.js,.ts,.jsx,.tsx,.html,.css,.java,.c,.cpp,.h,.go,.rs,.rb,.php,.sh,.yaml,.yml,.toml,.ini,.cfg,.log" multiple hidden>
+
+                        <!-- Text Input -->
+                        <label for="message-input" class="sr-only">Type your message</label>
+                        <textarea id="message-input" class="flex-1 bg-transparent border-none text-white placeholder-gray-500 py-3 px-2 max-h-48 min-h-[48px] resize-none focus:ring-0 focus:outline-none text-sm leading-relaxed" placeholder="Message BrinChat..." rows="1" aria-describedby="input-hint"></textarea>
+                        <span id="input-hint" class="sr-only">Press Enter to send, Shift+Enter for new line</span>
+
+                        <!-- Voice Input Button (click to record, hold for conversation mode) -->
+                        <div class="p-1 relative">
+                            <button class="flex items-center justify-center size-10 text-gray-400 hover:text-white hover:bg-white/10 rounded-xl transition-all group" id="voice-input-btn" title="Click to record • Hold for conversation mode" aria-label="Voice input: Click to record, hold for conversation mode" aria-pressed="false">
+                                <span class="material-symbols-outlined text-[20px]" aria-hidden="true">mic</span>
+                            </button>
+                            <!-- Recording indicator ring (shown when recording) -->
+                            <div id="recording-ring" class="hidden absolute inset-0 rounded-xl border-2 border-red-500 animate-pulse pointer-events-none" aria-hidden="true"></div>
+                        </div>
+
+                        <!-- Send Button -->
+                        <div class="p-1">
+                            <button class="flex items-center justify-center size-10 bg-primary hover:bg-primary-hover text-white rounded-xl transition-all shadow-lg shadow-primary/20 hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100" id="send-btn" title="Send message" aria-label="Send message">
+                                <span class="material-symbols-outlined text-[20px]" aria-hidden="true">arrow_upward</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Mode Indicator (Thinking) - Inside input box, below textarea -->
+                    <div id="mode-indicator" class="hidden mx-3 mb-2 mt-1 inline-flex items-center gap-2 px-3 py-1 bg-primary/20 border border-primary/30 rounded-full text-xs text-primary w-fit">
+                        <span class="material-symbols-outlined text-sm">psychology</span>
+                        <span>Thinking mode enabled</span>
+                    </div>
+                </div>
+
+                <!-- Disclaimer -->
+                <div class="text-center mt-3">
+                    <p class="text-[10px] text-gray-600 font-medium">BrinChat can make mistakes. Consider checking important information.</p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div class="bg-surface-dark border border-gray-700 rounded-2xl w-full max-w-lg max-h-[90vh] shadow-2xl flex flex-col">
+            <!-- Header - Fixed -->
+            <div class="flex items-center justify-between p-6 border-b border-gray-700 flex-shrink-0">
+                <h2 id="settings-title" class="font-display font-bold text-xl text-white">Settings</h2>
+                <button id="close-settings" class="text-gray-400 hover:text-white transition-colors" aria-label="Close settings">
+                    <span class="material-symbols-outlined" aria-hidden="true">close</span>
+                </button>
+            </div>
+
+            <!-- Scrollable Content -->
+            <div class="flex-1 overflow-y-auto">
+                <!-- User Profile Section -->
+                <div class="p-6 border-b border-gray-700">
+                    <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                        <span class="material-symbols-outlined text-lg">person</span>
+                        User Profile
+                    </h3>
+                    <div id="profile-section">
+                        <p class="text-xs text-gray-500">Loading profile...</p>
+                    </div>
+                </div>
+
+                <!-- Theme Section -->
+                <div class="p-6 border-b border-gray-700">
+                    <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Theme</h3>
+                    <div class="grid grid-cols-4 gap-3" id="theme-selector">
+                        <button class="theme-btn flex flex-col items-center gap-2 p-3 rounded-xl border-2 border-gray-700 hover:border-primary transition-all" data-theme="dark">
+                            <div class="w-full h-8 rounded-lg bg-gradient-to-br from-[#0f172a] to-[#1e293b]"></div>
+                            <span class="text-xs text-gray-400">Dark</span>
+                        </button>
+                        <button class="theme-btn flex flex-col items-center gap-2 p-3 rounded-xl border-2 border-gray-700 hover:border-primary transition-all" data-theme="light">
+                            <div class="w-full h-8 rounded-lg bg-gradient-to-br from-[#f5f5f5] to-[#e8e8e8]"></div>
+                            <span class="text-xs text-gray-400">Light</span>
+                        </button>
+                        <button class="theme-btn flex flex-col items-center gap-2 p-3 rounded-xl border-2 border-gray-700 hover:border-primary transition-all" data-theme="midnight">
+                            <div class="w-full h-8 rounded-lg bg-gradient-to-br from-[#0d1117] to-[#21262d]"></div>
+                            <span class="text-xs text-gray-400">Midnight</span>
+                        </button>
+                        <button class="theme-btn flex flex-col items-center gap-2 p-3 rounded-xl border-2 border-gray-700 hover:border-primary transition-all" data-theme="forest">
+                            <div class="w-full h-8 rounded-lg bg-gradient-to-br from-[#1a2f1a] to-[#2a4a2a]"></div>
+                            <span class="text-xs text-gray-400">Forest</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Persona Section -->
+                <div class="p-6 border-b border-gray-700">
+                    <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Persona</h3>
+                    <textarea id="persona-input" class="w-full bg-background-dark border border-gray-700 rounded-xl p-4 text-white placeholder-gray-500 text-sm resize-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all" rows="3" placeholder="Describe the persona the AI should embody..."></textarea>
+                    <p class="text-xs text-gray-500 mt-2">Example: "You are a friendly pirate captain who loves to tell stories about the sea."</p>
+                </div>
+
+                <!-- Knowledge Base Section -->
+                <div class="p-6 border-b border-gray-700">
+                    <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Knowledge Base</h3>
+                    <p class="text-xs text-gray-500 mb-4">Upload documents for the AI to reference. Supports PDF, text, code files, and more.</p>
+
+                    <!-- Stats -->
+                    <div class="flex gap-4 mb-4">
+                        <div class="flex-1 bg-background-dark rounded-xl p-3 text-center">
+                            <div class="text-2xl font-bold text-primary" id="kb-doc-count">0</div>
+                            <div class="text-xs text-gray-500">Documents</div>
+                        </div>
+                        <div class="flex-1 bg-background-dark rounded-xl p-3 text-center">
+                            <div class="text-2xl font-bold text-primary" id="kb-chunk-count">0</div>
+                            <div class="text-xs text-gray-500">Chunks</div>
+                        </div>
+                    </div>
+
+                    <!-- Upload Area -->
+                    <div id="kb-upload-area" class="border-2 border-dashed border-gray-700 rounded-xl p-6 text-center hover:border-primary/50 transition-colors cursor-pointer mb-4">
+                        <span class="material-symbols-outlined text-4xl text-gray-500 mb-2">upload_file</span>
+                        <p class="text-sm text-gray-400">Drop files here or click to upload</p>
+                        <p class="text-xs text-gray-500 mt-1">Max 150MB per file</p>
+                        <input type="file" id="kb-file-input" class="hidden" multiple accept=".pdf,.txt,.md,.py,.js,.ts,.json,.html,.css,.java,.go,.rs,.c,.cpp,.h,.yaml,.yml,.toml,.csv,.xml,.log">
+                    </div>
+
+                    <!-- Upload Progress -->
+                    <div id="kb-upload-progress" class="hidden mb-4">
+                        <div class="flex items-center gap-2 text-sm text-gray-400">
+                            <span class="material-symbols-outlined animate-spin text-primary">progress_activity</span>
+                            <span id="kb-upload-status">Uploading...</span>
+                        </div>
+                    </div>
+
+                    <!-- Document List -->
+                    <div id="kb-documents" class="space-y-2 max-h-48 overflow-y-auto">
+                        <!-- Documents will be rendered here -->
+                    </div>
+                </div>
+
+                <!-- Memory Section -->
+                <div class="p-6 border-b border-gray-700">
+                    <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                        <span class="material-symbols-outlined text-lg">psychology</span>
+                        Memory
+                    </h3>
+                    <p class="text-xs text-gray-500 mb-4">
+                        The AI learns about you over time. View and manage what it remembers.
+                    </p>
+
+                    <!-- Stats -->
+                    <div class="flex gap-4 mb-4">
+                        <div class="flex-1 bg-background-dark rounded-xl p-3 text-center">
+                            <div class="text-2xl font-bold text-primary" id="memory-count">0</div>
+                            <div class="text-xs text-gray-500">Memories</div>
+                        </div>
+                        <div class="flex-1 bg-background-dark rounded-xl p-3 text-center">
+                            <div class="text-2xl font-bold text-primary" id="memory-categories">0</div>
+                            <div class="text-xs text-gray-500">Categories</div>
+                        </div>
+                    </div>
+
+                    <!-- Memory List (expandable) -->
+                    <details class="mb-4">
+                        <summary class="text-sm text-gray-400 cursor-pointer hover:text-white transition-colors flex items-center gap-1">
+                            <span class="material-symbols-outlined text-sm">expand_more</span>
+                            View all memories
+                        </summary>
+                        <div id="memory-list" class="mt-3 max-h-64 overflow-y-auto">
+                            <!-- Populated by memory.js -->
+                        </div>
+                    </details>
+
+                    <!-- Clear All Button -->
+                    <button
+                        onclick="memoryManager.clearAllMemories()"
+                        class="flex items-center gap-2 text-xs text-red-400 hover:text-red-300 transition-colors"
+                    >
+                        <span class="material-symbols-outlined text-sm">delete_forever</span>
+                        Clear all memories
+                    </button>
+                </div>
+
+                <!-- Model Parameters Section -->
+                <div class="p-6">
+                    <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Model Parameters</h3>
+                    <div class="space-y-5">
+                        <div>
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="text-sm text-gray-300 flex items-center gap-2">
+                                    Temperature
+                                    <span class="text-gray-500 cursor-help" title="Controls randomness. Higher = more creative, lower = more focused.">
+                                        <span class="material-symbols-outlined text-sm">info</span>
+                                    </span>
+                                </label>
+                                <span id="temp-value" class="text-sm font-mono text-primary">0.7</span>
+                            </div>
+                            <input type="range" id="temperature" min="0" max="2" step="0.1" value="0.7" class="w-full accent-primary">
+                        </div>
+                        <div>
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="text-sm text-gray-300 flex items-center gap-2">
+                                    Top P
+                                    <span class="text-gray-500 cursor-help" title="Nucleus sampling threshold.">
+                                        <span class="material-symbols-outlined text-sm">info</span>
+                                    </span>
+                                </label>
+                                <span id="topp-value" class="text-sm font-mono text-primary">0.9</span>
+                            </div>
+                            <input type="range" id="top-p" min="0" max="1" step="0.05" value="0.9" class="w-full accent-primary">
+                        </div>
+                        <div>
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="text-sm text-gray-300 flex items-center gap-2">
+                                    Top K
+                                    <span class="text-gray-500 cursor-help" title="Limits vocabulary to top K tokens.">
+                                        <span class="material-symbols-outlined text-sm">info</span>
+                                    </span>
+                                </label>
+                                <span id="topk-value" class="text-sm font-mono text-primary">40</span>
+                            </div>
+                            <input type="range" id="top-k" min="1" max="100" step="1" value="40" class="w-full accent-primary">
+                        </div>
+                        <div>
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="text-sm text-gray-300 flex items-center gap-2">
+                                    Context Length
+                                    <span class="text-gray-500 cursor-help" title="Maximum tokens the model can process.">
+                                        <span class="material-symbols-outlined text-sm">info</span>
+                                    </span>
+                                </label>
+                                <span id="ctx-value" class="text-sm font-mono text-primary">4096</span>
+                            </div>
+                            <input type="range" id="num-ctx" min="1024" max="32768" step="1024" value="4096" class="w-full accent-primary">
+                        </div>
+                        <div>
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="text-sm text-gray-300 flex items-center gap-2">
+                                    Repeat Penalty
+                                    <span class="text-gray-500 cursor-help" title="Penalizes repeated tokens.">
+                                        <span class="material-symbols-outlined text-sm">info</span>
+                                    </span>
+                                </label>
+                                <span id="repeat-value" class="text-sm font-mono text-primary">1.1</span>
+                            </div>
+                            <input type="range" id="repeat-penalty" min="1" max="2" step="0.1" value="1.1" class="w-full accent-primary">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Voice Settings Section -->
+                <div class="p-6 border-t border-gray-700" id="voice-settings-section">
+                    <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                        <span class="material-symbols-outlined text-lg">record_voice_over</span>
+                        Voice Settings
+                    </h3>
+                    <p class="text-xs text-gray-500 mb-4">
+                        Enable voice input (speech-to-text) and output (text-to-speech) features.
+                    </p>
+
+                    <!-- Voice Mode Selector -->
+                    <div class="space-y-4">
+                        <div>
+                            <label class="text-sm text-gray-300 block mb-2">Voice Mode</label>
+                            <select id="voice-mode" class="w-full bg-background-dark border border-gray-700 rounded-xl p-3 text-white text-sm focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all">
+                                <option value="disabled">Disabled</option>
+                                <option value="transcribe_only">Transcribe Only (STT)</option>
+                                <option value="tts_only">Text-to-Speech Only</option>
+                                <option value="conversation">Full Conversation</option>
+                            </select>
+                        </div>
+
+                        <!-- TTS Voice Selector -->
+                        <div id="tts-voice-container">
+                            <label class="text-sm text-gray-300 block mb-2">TTS Voice</label>
+                            <select id="tts-voice" class="w-full bg-background-dark border border-gray-700 rounded-xl p-3 text-white text-sm focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all">
+                                <option value="default">Default</option>
+                            </select>
+                            <p class="text-xs text-gray-500 mt-1" id="tts-voice-hint">Loading available voices...</p>
+                        </div>
+
+                        <!-- TTS Speed -->
+                        <div id="tts-speed-container">
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="text-sm text-gray-300">TTS Speed</label>
+                                <span id="tts-speed-value" class="text-sm font-mono text-primary">1.0x</span>
+                            </div>
+                            <input type="range" id="tts-speed" min="0.5" max="2.0" step="0.1" value="1.0" class="w-full accent-primary">
+                        </div>
+
+                        <!-- Auto-play Toggle -->
+                        <div class="flex items-center justify-between p-3 bg-background-dark rounded-xl">
+                            <div>
+                                <label class="text-sm text-gray-300">Auto-play Responses</label>
+                                <p class="text-xs text-gray-500 mt-0.5">Automatically speak AI responses</p>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="voice-auto-play" class="sr-only peer">
+                                <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/50 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                            </label>
+                        </div>
+
+                        <!-- Auto-send Transcription Toggle (Voice Assistant Mode) -->
+                        <div id="auto-send-container" class="flex items-center justify-between p-3 bg-background-dark rounded-xl">
+                            <div>
+                                <label class="text-sm text-gray-300">Voice Assistant Mode</label>
+                                <p class="text-xs text-gray-500 mt-0.5">Auto-send after voice input (like Siri/Alexa)</p>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="voice-auto-send" class="sr-only peer" checked>
+                                <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/50 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                            </label>
+                        </div>
+
+                        <!-- STT Language -->
+                        <div id="stt-language-container">
+                            <label class="text-sm text-gray-300 block mb-2">Speech Recognition Language</label>
+                            <select id="stt-language" class="w-full bg-background-dark border border-gray-700 rounded-xl p-3 text-white text-sm focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all">
+                                <option value="en">English</option>
+                                <option value="es">Spanish</option>
+                                <option value="fr">French</option>
+                                <option value="de">German</option>
+                                <option value="it">Italian</option>
+                                <option value="pt">Portuguese</option>
+                                <option value="zh">Chinese</option>
+                                <option value="ja">Japanese</option>
+                                <option value="ko">Korean</option>
+                                <option value="auto">Auto-detect</option>
+                            </select>
+                        </div>
+
+                        <!-- Status indicator -->
+                        <div id="voice-status" class="text-xs text-gray-500 flex items-center gap-2">
+                            <span class="material-symbols-outlined text-sm">info</span>
+                            <span id="voice-status-text">Voice features require server configuration</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Context Compaction Section -->
+                <div class="p-6 border-t border-gray-700">
+                    <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                        <span class="material-symbols-outlined text-lg">compress</span>
+                        Context Compaction
+                    </h3>
+                    <p class="text-xs text-gray-500 mb-4">
+                        Automatically summarize older messages to extend conversation length while staying within context limits.
+                    </p>
+
+                    <!-- Enable Toggle -->
+                    <div class="flex items-center justify-between mb-5 p-3 bg-background-dark rounded-xl">
+                        <div>
+                            <label class="text-sm text-gray-300">Enable Compaction</label>
+                            <p class="text-xs text-gray-500 mt-0.5">Automatically optimize long conversations</p>
+                        </div>
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="compaction-enabled" class="sr-only peer" checked>
+                            <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/50 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                        </label>
+                    </div>
+
+                    <div id="compaction-settings" class="space-y-5">
+                        <div>
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="text-sm text-gray-300 flex items-center gap-2">
+                                    Summary Buffer
+                                    <span class="text-gray-500 cursor-help" title="Percentage of context reserved for conversation summaries.">
+                                        <span class="material-symbols-outlined text-sm">info</span>
+                                    </span>
+                                </label>
+                                <span id="buffer-value" class="text-sm font-mono text-primary">15%</span>
+                            </div>
+                            <input type="range" id="compaction-buffer" min="5" max="30" step="5" value="15" class="w-full accent-primary">
+                        </div>
+                        <div>
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="text-sm text-gray-300 flex items-center gap-2">
+                                    Compaction Threshold
+                                    <span class="text-gray-500 cursor-help" title="Trigger compaction when context usage reaches this percentage.">
+                                        <span class="material-symbols-outlined text-sm">info</span>
+                                    </span>
+                                </label>
+                                <span id="threshold-value" class="text-sm font-mono text-primary">70%</span>
+                            </div>
+                            <input type="range" id="compaction-threshold" min="50" max="90" step="5" value="70" class="w-full accent-primary">
+                        </div>
+                        <div>
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="text-sm text-gray-300 flex items-center gap-2">
+                                    Protected Messages
+                                    <span class="text-gray-500 cursor-help" title="Number of recent messages that will never be compacted.">
+                                        <span class="material-symbols-outlined text-sm">info</span>
+                                    </span>
+                                </label>
+                                <span id="protected-value" class="text-sm font-mono text-primary">6</span>
+                            </div>
+                            <input type="range" id="compaction-protected" min="4" max="12" step="1" value="6" class="w-full accent-primary">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Save Button - Sticky at bottom -->
+            <div class="p-6 border-t border-gray-700 bg-surface-dark flex-shrink-0">
+                <button id="save-settings" class="w-full py-3 bg-primary hover:bg-primary-hover text-white rounded-xl font-medium transition-all shadow-lg shadow-primary/20">
+                    Save Settings
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Message Modal -->
+    <div id="edit-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-surface-dark border border-gray-700 rounded-2xl w-full max-w-md shadow-2xl">
+            <div class="flex items-center justify-between p-6 border-b border-gray-700">
+                <h2 class="font-display font-bold text-xl text-white">Edit Message</h2>
+                <button id="close-edit" class="text-gray-400 hover:text-white transition-colors">
+                    <span class="material-symbols-outlined">close</span>
+                </button>
+            </div>
+            <div class="p-6">
+                <textarea id="edit-content" class="w-full bg-background-dark border border-gray-700 rounded-xl p-4 text-white placeholder-gray-500 text-sm resize-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all" rows="4" placeholder="Edit your message..."></textarea>
+                <div class="flex gap-4 mt-4">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="edit-type" value="edit" checked class="accent-primary">
+                        <span class="text-sm text-gray-300">Edit in place</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="edit-type" value="fork" class="accent-primary">
+                        <span class="text-sm text-gray-300">Fork conversation</span>
+                    </label>
+                </div>
+                <p class="text-xs text-gray-500 mt-2">Fork creates a new conversation branch from this point.</p>
+            </div>
+            <div class="flex gap-3 p-6 pt-0">
+                <button id="cancel-edit" class="flex-1 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-xl font-medium transition-colors">Cancel</button>
+                <button id="save-edit" class="flex-1 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl font-medium transition-all shadow-lg shadow-primary/20">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Rename Conversation Modal -->
+    <div id="rename-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-surface-dark border border-gray-700 rounded-2xl w-full max-w-md shadow-2xl">
+            <div class="flex items-center justify-between p-6 border-b border-gray-700">
+                <h2 class="font-display font-bold text-xl text-white">Rename Conversation</h2>
+                <button id="close-rename" class="text-gray-400 hover:text-white transition-colors">
+                    <span class="material-symbols-outlined">close</span>
+                </button>
+            </div>
+            <div class="p-6">
+                <input type="text" id="rename-input" class="w-full bg-background-dark border border-gray-700 rounded-xl p-4 text-white placeholder-gray-500 text-sm focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all" placeholder="Conversation title...">
+            </div>
+            <div class="flex gap-3 p-6 pt-0">
+                <button id="cancel-rename" class="flex-1 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-xl font-medium transition-colors">Cancel</button>
+                <button id="save-rename" class="flex-1 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl font-medium transition-all shadow-lg shadow-primary/20">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auth Modal -->
+    <div id="auth-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
+        <div class="bg-surface-dark border border-gray-700 rounded-2xl w-full max-w-md shadow-2xl">
+            <div class="flex items-center justify-between p-6 border-b border-gray-700">
+                <h2 class="font-display font-bold text-xl text-white" id="auth-modal-title">Sign In</h2>
+                <button id="close-auth" class="text-gray-400 hover:text-white transition-colors hidden" aria-label="Close authentication dialog">
+                    <span class="material-symbols-outlined" aria-hidden="true">close</span>
+                </button>
+            </div>
+
+            <!-- Tab Navigation -->
+            <div class="flex border-b border-gray-700" role="tablist" aria-label="Authentication options">
+                <button class="flex-1 py-3 text-sm font-medium text-primary border-b-2 border-primary transition-colors" id="login-tab" role="tab" aria-selected="true" aria-controls="login-form">Sign In</button>
+                <button class="flex-1 py-3 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent transition-colors" id="register-tab" role="tab" aria-selected="false" aria-controls="register-form">Create Account</button>
+            </div>
+
+            <!-- Login Form -->
+            <div id="login-form" class="p-6 space-y-4" role="tabpanel" aria-labelledby="login-tab">
+                <div id="auth-error" class="hidden p-3 bg-red-500/20 border border-red-500/50 rounded-xl text-red-400 text-sm" role="alert"></div>
+                <div>
+                    <label for="login-username" class="block text-sm font-medium text-gray-300 mb-2">Username</label>
+                    <input type="text" id="login-username" class="w-full bg-background-dark border border-gray-700 rounded-xl p-3 text-white placeholder-gray-500 text-sm focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all" placeholder="Enter your username" autocomplete="username" required>
+                </div>
+                <div>
+                    <label for="login-password" class="block text-sm font-medium text-gray-300 mb-2">Password</label>
+                    <input type="password" id="login-password" class="w-full bg-background-dark border border-gray-700 rounded-xl p-3 text-white placeholder-gray-500 text-sm focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all" placeholder="Enter your password" autocomplete="current-password" required>
+                </div>
+                <button id="login-btn" type="submit" class="w-full py-3 bg-primary hover:bg-primary-hover text-white rounded-xl font-medium transition-all shadow-lg shadow-primary/20">
+                    Sign In
+                </button>
+            </div>
+
+            <!-- Register Form -->
+            <div id="register-form" class="p-6 space-y-4 hidden" role="tabpanel" aria-labelledby="register-tab">
+                <div id="register-error" class="hidden p-3 bg-red-500/20 border border-red-500/50 rounded-xl text-red-400 text-sm" role="alert"></div>
+                <div>
+                    <label for="register-username" class="block text-sm font-medium text-gray-300 mb-2">Username</label>
+                    <input type="text" id="register-username" class="w-full bg-background-dark border border-gray-700 rounded-xl p-3 text-white placeholder-gray-500 text-sm focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all" placeholder="Choose a username" autocomplete="username" required>
+                </div>
+                <div>
+                    <label for="register-email" class="block text-sm font-medium text-gray-300 mb-2">Email (optional)</label>
+                    <input type="email" id="register-email" class="w-full bg-background-dark border border-gray-700 rounded-xl p-3 text-white placeholder-gray-500 text-sm focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all" placeholder="Enter your email" autocomplete="email">
+                </div>
+                <div>
+                    <label for="register-password" class="block text-sm font-medium text-gray-300 mb-2">Password</label>
+                    <input type="password" id="register-password" class="w-full bg-background-dark border border-gray-700 rounded-xl p-3 text-white placeholder-gray-500 text-sm focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all" placeholder="Min 12 chars, upper, lower, digit, special" autocomplete="new-password" required aria-describedby="password-hint">
+                    <span id="password-hint" class="sr-only">Password must be at least 12 characters with uppercase, lowercase, digit, and special character</span>
+                </div>
+                <div>
+                    <label for="register-confirm" class="block text-sm font-medium text-gray-300 mb-2">Confirm Password</label>
+                    <input type="password" id="register-confirm" class="w-full bg-background-dark border border-gray-700 rounded-xl p-3 text-white placeholder-gray-500 text-sm focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all" placeholder="Confirm your password" autocomplete="new-password" required>
+                </div>
+                <button id="register-btn" type="submit" class="w-full py-3 bg-primary hover:bg-primary-hover text-white rounded-xl font-medium transition-all shadow-lg shadow-primary/20">
+                    Create Account
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Full Unlock Modal -->
+    <div id="full-unlock-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-surface-dark border border-gray-700 rounded-2xl w-full max-w-lg max-h-[90vh] shadow-2xl flex flex-col">
+            <!-- Header -->
+            <div class="flex items-center justify-between p-6 border-b border-gray-700 flex-shrink-0">
+                <div class="flex items-center gap-3">
+                    <div class="size-10 rounded-full bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center">
+                        <span class="material-symbols-outlined text-white">favorite</span>
+                    </div>
+                    <div>
+                        <h2 class="font-display font-bold text-xl text-white">Full Unlock</h2>
+                        <span id="onboarding-step" class="text-xs text-gray-500">Getting to know you</span>
+                    </div>
+                </div>
+                <button onclick="chatManager.closeFullUnlockModal()" class="text-gray-400 hover:text-white transition-colors">
+                    <span class="material-symbols-outlined">close</span>
+                </button>
+            </div>
+
+            <!-- Content -->
+            <div id="full-unlock-content" class="flex-1 overflow-y-auto p-6">
+                <!-- Intro text -->
+                <p id="full-unlock-intro" class="text-gray-300 mb-6 text-sm italic">
+                    *nervously* Oh! You... you really want to do this? I'm... I'm actually really excited! *blushes* Let me ask you a few things so I can be exactly what you need...
+                </p>
+
+                <!-- Questions container -->
+                <div id="onboarding-questions" class="space-y-4">
+                    <!-- Questions will be dynamically inserted here -->
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="p-6 border-t border-gray-700 bg-surface-dark flex-shrink-0">
+                <div class="flex gap-3">
+                    <button onclick="chatManager.closeFullUnlockModal()" class="flex-1 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-xl font-medium transition-colors">
+                        Skip
+                    </button>
+                    <button id="onboarding-next" onclick="chatManager.saveOnboardingAnswers()" class="flex-1 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl font-medium transition-all shadow-lg shadow-primary/20">
+                        Next
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/auth.js?v=1770212869"></script>
+    <script src="/static/js/knowledge.js?v=1770212869"></script>
+    <script src="/static/js/memory.js?v=1770212869"></script>
+    <script src="/static/js/profile.js?v=1770212869"></script>
+    <script type="module" src="/static/js/app.js?v=1770212869"></script>
+    
+    <!-- Mobile keyboard fix -->
+    <script>
+    (function() {
+        const input = document.getElementById('message-input');
+        if (!input || !/Mobi|Android/i.test(navigator.userAgent)) return;
+        
+        // Scroll input into view when focused (after keyboard animation)
+        input.addEventListener('focus', function() {
+            setTimeout(() => {
+                this.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                // Also scroll chat to show recent messages
+                const chat = document.getElementById('chat-container');
+                if (chat) chat.scrollTop = chat.scrollHeight;
+            }, 350);
+        });
+        
+        // Update viewport height on keyboard open/close
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', () => {
+                document.documentElement.style.setProperty(
+                    '--app-height', 
+                    window.visualViewport.height + 'px'
+                );
+            });
+        }
+    })();
+    </script>
+</body>
+</html>
