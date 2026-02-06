@@ -37,8 +37,40 @@ from app.services.task_extraction_service import get_task_extraction_service
 from app.models.schemas import ChatRequest
 from app.middleware.auth import require_auth
 from app.models.auth_schemas import UserResponse
+import base64
+import uuid
+from pathlib import Path
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+# Directory for temporary images (OpenClaw image tool can read these)
+TEMP_IMAGE_DIR = Path(__file__).parent.parent.parent / "temp_images"
+TEMP_IMAGE_DIR.mkdir(exist_ok=True)
+
+
+def save_images_for_openclaw(images: List[str]) -> List[str]:
+    """Save base64 images to temp files for OpenClaw's image tool.
+    
+    Returns list of file paths that can be passed to the image tool.
+    """
+    saved_paths = []
+    for i, img_b64 in enumerate(images):
+        try:
+            # Strip data URL prefix if present
+            if img_b64.startswith("data:"):
+                img_b64 = img_b64.split(",", 1)[-1]
+            
+            # Decode and save
+            img_bytes = base64.b64decode(img_b64)
+            filename = f"{uuid.uuid4().hex[:12]}.jpg"
+            filepath = TEMP_IMAGE_DIR / filename
+            filepath.write_bytes(img_bytes)
+            saved_paths.append(str(filepath))
+            logger.info(f"[OpenClaw] Saved image {i+1} to {filepath} ({len(img_bytes)} bytes)")
+        except Exception as e:
+            logger.error(f"[OpenClaw] Failed to save image {i+1}: {e}")
+    
+    return saved_paths
 
 # Track active generations for cancellation support
 # Key: conversation_id or request_id, Value: asyncio.Event (set when cancelled)
@@ -779,14 +811,22 @@ async def chat(request: Request, user: UserResponse = Depends(require_auth)):
             
             # Claude with system prompt (minimal for OpenClaw)
             # NOTE: OpenClaw's HTTP API doesn't support multi-part content (images in messages)
-            # When routing to OpenClaw, skip images - user can use /image command or upload separately
-            use_images = chat_request.images if (is_vision and not use_openclaw) else None
+            # When routing to OpenClaw, save images to temp files and instruct to use image tool
+            effective_user_message = user_message
             if use_openclaw and chat_request.images:
-                logger.warning(f"[OpenClaw] Skipping {len(chat_request.images)} images - HTTP API doesn't support embedded images")
+                image_paths = save_images_for_openclaw(chat_request.images)
+                if image_paths:
+                    # Append image paths to message so OpenClaw can use its image tool
+                    paths_str = "\n".join(f"- {p}" for p in image_paths)
+                    image_instruction = f"\n\n[User attached {len(image_paths)} image(s). Analyze with the image tool:]\n{paths_str}"
+                    effective_user_message = user_message + image_instruction
+                    logger.info(f"[OpenClaw] Saved {len(image_paths)} images for image tool analysis")
+            
+            use_images = chat_request.images if (is_vision and not use_openclaw) else None
             
             messages = claude_service.build_messages_with_system(
                 system_prompt=effective_prompt,
-                user_message=user_message,
+                user_message=effective_user_message,
                 history=history,
                 images=use_images,
                 is_vision_model=is_vision and not use_openclaw,
@@ -810,12 +850,12 @@ async def chat(request: Request, user: UserResponse = Depends(require_auth)):
                 })
             }
 
-        # Warn user if images were skipped due to OpenClaw routing
+        # Inform user that images are being processed via image tool
         if use_openclaw and chat_request.images:
             yield {
-                "event": "warning",
+                "event": "info",
                 "data": json.dumps({
-                    "message": "Images aren't supported via OpenClaw API. Use the image tool or upload to a service."
+                    "message": f"Processing {len(chat_request.images)} image(s) via image tool..."
                 })
             }
 
