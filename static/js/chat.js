@@ -1644,6 +1644,12 @@ export class ChatManager {
             }
         }
 
+        // Info/warning messages from server
+        if (data.message !== undefined && (data.type === 'info' || data.type === 'warning')) {
+            console.log(`[SSE] ${data.type}: ${data.message}`);
+            this.showToast(data.message, data.type, 3000);
+        }
+
         // Content replacement (replaces displayed content after stripping [MEMORY] tags)
         if (data.replace_content !== undefined) {
             console.log('[SSE] Content replacement received, stripping memory tags from display');

@@ -855,6 +855,7 @@ async def chat(request: Request, user: UserResponse = Depends(require_auth)):
             yield {
                 "event": "info",
                 "data": json.dumps({
+                    "type": "info",
                     "message": f"Processing {len(chat_request.images)} image(s) via image tool..."
                 })
             }
