@@ -20,6 +20,7 @@ from app.services.user_profile_service import get_user_profile_service
 from app.services.evaluator_service import get_evaluator_service
 from app.services.feature_service import get_feature_service
 from app.services.rate_limiter import get_chat_limiter
+from app.utils.image_utils import compress_images
 
 logger = logging.getLogger(__name__)
 from app.services.tool_executor import tool_executor, create_context
@@ -608,6 +609,13 @@ async def chat(request: Request, user: UserResponse = Depends(require_auth)):
                 f"Chat request: model={model_for_conv} (Claude via OpenClaw), vision={is_vision}, tools={supports_tools}, openclaw_fast={use_openclaw}"
             )
         logger.info(f"Images received: {len(chat_request.images) if chat_request.images else 0}, sizes: {[len(img) for img in chat_request.images] if chat_request.images else []}")
+
+        # Compress images to reduce token usage (prevents stream errors on large screenshots)
+        if chat_request.images:
+            original_sizes = [len(img) for img in chat_request.images]
+            chat_request.images = compress_images(chat_request.images)
+            new_sizes = [len(img) for img in chat_request.images]
+            logger.info(f"[ImageCompress] Compressed images: {original_sizes} -> {new_sizes}")
 
         # Get tools for Claude (always supports tools)
         tools = get_tools_for_model(supports_tools=supports_tools, supports_vision=is_vision)
