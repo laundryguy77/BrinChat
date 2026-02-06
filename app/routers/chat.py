@@ -778,12 +778,18 @@ async def chat(request: Request, user: UserResponse = Depends(require_auth)):
                 logger.debug("Using minimal prompt for OpenClaw model")
             
             # Claude with system prompt (minimal for OpenClaw)
+            # NOTE: OpenClaw's HTTP API doesn't support multi-part content (images in messages)
+            # When routing to OpenClaw, skip images - user can use /image command or upload separately
+            use_images = chat_request.images if (is_vision and not use_openclaw) else None
+            if use_openclaw and chat_request.images:
+                logger.warning(f"[OpenClaw] Skipping {len(chat_request.images)} images - HTTP API doesn't support embedded images")
+            
             messages = claude_service.build_messages_with_system(
                 system_prompt=effective_prompt,
                 user_message=user_message,
                 history=history,
-                images=chat_request.images if is_vision else None,
-                is_vision_model=is_vision,
+                images=use_images,
+                is_vision_model=is_vision and not use_openclaw,
                 supports_tools=supports_tools
             )
 
@@ -801,6 +807,15 @@ async def chat(request: Request, user: UserResponse = Depends(require_auth)):
                 "data": json.dumps({
                     "id": user_msg.id,
                     "role": "user"
+                })
+            }
+
+        # Warn user if images were skipped due to OpenClaw routing
+        if use_openclaw and chat_request.images:
+            yield {
+                "event": "warning",
+                "data": json.dumps({
+                    "message": "Images aren't supported via OpenClaw API. Use the image tool or upload to a service."
                 })
             }
 
