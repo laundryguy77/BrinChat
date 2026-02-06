@@ -1079,10 +1079,11 @@ async def chat(request: Request, user: UserResponse = Depends(require_auth)):
                             "data": json.dumps({"content": msg["content"]})
                         }
 
-                        # Persist partial content occasionally so app-switch / stream drops don't lose everything
+                        # Persist partial content frequently for mobile resilience (app-switch recovery)
+                        # Every 1 second OR every 100 chars, whichever comes first
                         if assistant_msg_id:
                             now = time.monotonic()
-                            if (now - last_persist_ts) >= 2.0 and (len(collected_content) - last_persist_len) >= 200:
+                            if (now - last_persist_ts) >= 1.0 or (len(collected_content) - last_persist_len) >= 100:
                                 try:
                                     await conversation_store.update_message(conv_id, assistant_msg_id, collected_content)
                                     last_persist_ts = now

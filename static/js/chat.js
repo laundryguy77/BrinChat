@@ -74,47 +74,69 @@ export class ChatManager {
 
     /**
      * Handle page visibility changes (app switch, phone lock)
-     * Reconnects stream if it was interrupted
+     * Auto-recovers by reloading the conversation to show any content that was persisted
      */
     initializeVisibilityHandler() {
-        document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') {
-                console.log('[Chat] Page became visible, checking stream status');
-                // If we were streaming and it got interrupted, the UI will show
-                // Give user feedback that they may need to resend
-                if (this.isStreaming && this.abortController) {
-                    // Check if the stream is still alive by checking the abort signal
-                    if (this.abortController.signal.aborted) {
-                        console.log('[Chat] Stream was aborted while hidden');
-                        this.handleStreamInterruption();
-                    }
+        // Track when we went hidden (to detect long absences)
+        let hiddenAt = null;
+        let wasStreaming = false;
+        let streamingConvId = null;
+
+        document.addEventListener('visibilitychange', async () => {
+            if (document.visibilityState === 'hidden') {
+                hiddenAt = Date.now();
+                wasStreaming = this.isStreaming;
+                streamingConvId = this.app.currentConversationId;
+                console.log('[Mobile] Page hidden, wasStreaming:', wasStreaming);
+            } else if (document.visibilityState === 'visible') {
+                const hiddenDuration = hiddenAt ? Date.now() - hiddenAt : 0;
+                console.log('[Mobile] Page visible after', Math.round(hiddenDuration / 1000), 'seconds');
+
+                // If we were streaming and were hidden for more than 2 seconds, assume stream broke
+                if (wasStreaming && hiddenDuration > 2000 && streamingConvId) {
+                    console.log('[Mobile] Stream likely interrupted, recovering...');
+                    await this.handleStreamRecovery(streamingConvId);
                 }
+                
+                hiddenAt = null;
+                wasStreaming = false;
+                streamingConvId = null;
             }
         });
 
         // Also handle page hide for cleanup
         window.addEventListener('pagehide', () => {
             if (this.isStreaming) {
-                console.log('[Chat] Page hiding, stream may be interrupted');
+                console.log('[Mobile] Page hiding during stream');
             }
         });
     }
 
     /**
-     * Handle stream interruption when user returns to app
+     * Recover from stream interruption by reloading the conversation
+     * This shows any content that was persisted server-side during the stream
      */
-    handleStreamInterruption() {
-        // Add a notice to the current message if one exists
-        if (this.currentAssistantMessage && this.currentAssistantMessage.content) {
-            const notice = document.createElement('div');
-            notice.className = 'mt-2 p-2 bg-yellow-500/10 border border-yellow-500/30 rounded-lg text-yellow-400 text-sm flex items-center gap-2';
-            notice.innerHTML = `
-                <span class="material-symbols-outlined text-base">warning</span>
-                <span>Connection interrupted. You may need to resend your message.</span>
-            `;
-            this.currentAssistantMessage.content.appendChild(notice);
+    async handleStreamRecovery(convId) {
+        // Stop client-side streaming state
+        this.isStreaming = false;
+        this.userIsScrolling = false;
+        if (this.abortController) {
+            this.abortController.abort();
+            this.abortController = null;
         }
-        this.stopGeneration();
+        this.updateModelStatus('idle');
+
+        // Reload the conversation to get persisted content
+        try {
+            console.log('[Mobile] Reloading conversation', convId);
+            await this.app.loadConversation(convId);
+            
+            // Show a subtle toast that we recovered
+            this.showToast('Reconnected - response may be partial', 'info', 3000);
+        } catch (e) {
+            console.error('[Mobile] Recovery failed:', e);
+            this.showToast('Connection lost. Please refresh.', 'warning', 5000);
+        }
     }
 
     /**
