@@ -134,6 +134,22 @@ export class VoiceManager {
     }
 
     setupEventListeners() {
+        // Unlock audio context on first user interaction anywhere on page.
+        // This ensures TTS autoplay works even for typed messages when auto_play is on.
+        const unlockOnce = () => {
+            this.unlockAudio();
+            document.removeEventListener('click', unlockOnce);
+            document.removeEventListener('keydown', unlockOnce);
+        };
+        document.addEventListener('click', unlockOnce);
+        document.addEventListener('keydown', unlockOnce);
+
+        // Also unlock on send button click
+        const sendBtn = document.getElementById('send-btn');
+        if (sendBtn) {
+            sendBtn.addEventListener('click', () => this.unlockAudio());
+        }
+
         // Main mic button (Mode 1: Transcription)
         const micBtn = document.getElementById('voice-input-btn');
         if (micBtn) {
@@ -190,6 +206,9 @@ export class VoiceManager {
     // ==================== Mode 1: Transcription ====================
 
     async handleMicClick() {
+        // Unlock audio on user gesture so TTS autoplay works later
+        await this.unlockAudio();
+
         if (!this.canRecord()) {
             this.showToast('Voice input is not enabled. Enable in Settings → Voice.', 'warning');
             return;
@@ -626,7 +645,7 @@ export class VoiceManager {
     // ==================== TTS Playback ====================
 
     async speakText(text, force = false) {
-        console.log('[Voice] speakText called - force:', force, 'canPlayTTS:', this.canPlayTTS(), 'settings:', JSON.stringify(this.settings));
+        console.log('[Voice] speakText called - force:', force, 'canPlayTTS:', this.canPlayTTS(), 'voice_enabled:', this.settings.voice_enabled, 'voice_mode:', this.settings.voice_mode, 'auto_play:', this.settings.auto_play);
         
         // Check if TTS is enabled
         if (!force && !this.canPlayTTS()) {
@@ -635,8 +654,14 @@ export class VoiceManager {
         }
 
         if (!this.settings.voice_enabled) {
-            console.log('[Voice] Voice not enabled on server - settings.voice_enabled:', this.settings.voice_enabled);
-            return;
+            console.log('[Voice] Voice not enabled on server - trying to reload settings...');
+            // Settings might not have loaded yet - try reloading
+            await this.loadSettings();
+            if (!this.settings.voice_enabled) {
+                console.log('[Voice] Voice still not enabled after reload. Aborting.');
+                return;
+            }
+            console.log('[Voice] Settings reloaded successfully, voice_enabled:', this.settings.voice_enabled);
         }
 
         const cleanText = this.cleanTextForTTS(text);
@@ -646,6 +671,9 @@ export class VoiceManager {
         }
 
         console.log('[Voice] Speaking:', cleanText.substring(0, 50) + '...');
+        
+        // Ensure audio context is unlocked
+        await this.unlockAudio();
 
         try {
             const response = await fetch('/api/voice/tts/stream?' + new URLSearchParams({
@@ -691,6 +719,22 @@ export class VoiceManager {
         }
     }
 
+    /**
+     * Unlock audio playback by creating/resuming an AudioContext.
+     * Must be called from a user gesture (click/tap) handler to satisfy
+     * browser autoplay policies. Subsequent Audio.play() calls will work
+     * even outside a gesture as long as the context is running.
+     */
+    async unlockAudio() {
+        if (!this._audioCtxForPlayback) {
+            this._audioCtxForPlayback = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (this._audioCtxForPlayback.state === 'suspended') {
+            await this._audioCtxForPlayback.resume();
+            console.log('[Voice] AudioContext unlocked for autoplay');
+        }
+    }
+
     async playAudioChunks(chunks) {
         const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
         const combined = new Uint8Array(totalLength);
@@ -714,12 +758,24 @@ export class VoiceManager {
             };
 
             this.currentAudio.onerror = (e) => {
+                console.error('[Voice] Audio playback error:', e);
                 this.isPlaying = false;
                 URL.revokeObjectURL(url);
                 reject(e);
             };
 
-            this.currentAudio.play().catch(reject);
+            this.currentAudio.play().then(() => {
+                console.log('[Voice] Audio playback started successfully');
+            }).catch((err) => {
+                console.error('[Voice] Audio.play() rejected:', err.name, err.message);
+                this.isPlaying = false;
+                URL.revokeObjectURL(url);
+                // If autoplay was blocked, show a toast so the user knows
+                if (err.name === 'NotAllowedError') {
+                    this.showToast('Browser blocked audio autoplay. Click anywhere on the page to enable.', 'warning');
+                }
+                reject(err);
+            });
         });
     }
 
@@ -797,6 +853,98 @@ export class VoiceManager {
         this.stopRecording();
         this.stopPlayback();
         this.exitConversationMode();
+    }
+}
+
+// ==================== Streaming Audio Player ====================
+
+/**
+ * StreamingAudioPlayer — Gapless playback of sequential audio chunks
+ * using the Web Audio API.
+ *
+ * Chunks arrive as ArrayBuffers (WAV), are decoded into AudioBuffers,
+ * and scheduled back-to-back on AudioBufferSourceNodes so there are
+ * no micro-gaps between sentences.
+ */
+export class StreamingAudioPlayer {
+    constructor(audioContext) {
+        this.ctx = audioContext;
+        this.queue = [];          // { index, buffer } sorted by index
+        this.nextIndex = 0;       // next index we expect to play
+        this.nextStartTime = 0;   // Web Audio time for next node start
+        this.playing = false;
+        this.done = false;        // true once tts_done received
+        this.activeNodes = [];
+    }
+
+    /**
+     * Enqueue an audio chunk for playback.
+     * @param {ArrayBuffer} audioData - Raw audio bytes (WAV)
+     * @param {number} index - Sequence number from server
+     */
+    async enqueue(audioData, index) {
+        try {
+            const buffer = await this.ctx.decodeAudioData(audioData);
+            this.queue.push({ index, buffer });
+            this.queue.sort((a, b) => a.index - b.index);
+            console.log(`[StreamPlayer] Enqueued chunk #${index} (${buffer.duration.toFixed(2)}s)`);
+            this._scheduleNext();
+        } catch (err) {
+            console.error(`[StreamPlayer] Failed to decode chunk #${index}:`, err);
+        }
+    }
+
+    /**
+     * Signal that no more chunks will arrive.
+     */
+    markDone() {
+        this.done = true;
+        console.log('[StreamPlayer] All chunks received');
+    }
+
+    /**
+     * Stop all playback and clear the queue.
+     */
+    stop() {
+        this.playing = false;
+        this.done = true;
+        this.queue = [];
+        this.nextIndex = 0;
+        this.nextStartTime = 0;
+        for (const node of this.activeNodes) {
+            try { node.stop(); } catch (_) { /* may already be stopped */ }
+        }
+        this.activeNodes = [];
+    }
+
+    /** @private Schedule queued buffers for gapless playback */
+    _scheduleNext() {
+        while (this.queue.length > 0 && this.queue[0].index === this.nextIndex) {
+            const { buffer } = this.queue.shift();
+            const source = this.ctx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(this.ctx.destination);
+
+            // Schedule start time for gapless playback
+            const startAt = Math.max(this.ctx.currentTime, this.nextStartTime);
+            source.start(startAt);
+            this.nextStartTime = startAt + buffer.duration;
+            this.nextIndex++;
+            this.playing = true;
+
+            this.activeNodes.push(source);
+
+            source.onended = () => {
+                const idx = this.activeNodes.indexOf(source);
+                if (idx !== -1) this.activeNodes.splice(idx, 1);
+
+                // If all nodes finished and no more chunks coming, we're done
+                if (this.activeNodes.length === 0 && (this.done || this.queue.length === 0)) {
+                    this.playing = false;
+                    console.log('[StreamPlayer] Playback complete');
+                }
+            };
+        }
     }
 }
 

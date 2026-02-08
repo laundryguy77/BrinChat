@@ -178,16 +178,40 @@ async def get_model_capabilities_endpoint(model_name: str):
 
 @router.get("/tools")
 async def list_available_tools(user: UserResponse = Depends(require_auth)) -> Dict[str, Any]:
-    """List available tools — tools are managed by OpenClaw natively."""
+    """List all available tools for Claude."""
+    from app.tools.definitions import get_tools_for_model, ALL_TOOLS
+    from app.services.feature_service import get_feature_service
+
     settings = get_settings()
+
+    # Get all tools (Claude supports everything)
+    filtered_tools = get_tools_for_model(
+        supports_tools=True,
+        supports_vision=True
+    )
+
+    # Filter tools based on user's feature flags
+    if filtered_tools:
+        feature_service = get_feature_service()
+        filtered_tools = feature_service.filter_tools_for_user(filtered_tools, user.id)
+
+    # Extract tool details for response
+    tool_details = []
+    for tool in filtered_tools:
+        func = tool.get("function", {})
+        tool_details.append({
+            "name": func.get("name"),
+            "description": func.get("description", "")[:100] + "..." if len(func.get("description", "")) > 100 else func.get("description", ""),
+            "parameters": list(func.get("parameters", {}).get("properties", {}).keys())
+        })
+
     return {
         "model": settings.model,
         "supports_tools": True,
         "supports_vision": True,
-        "total_tools": 0,
-        "builtin_tools": 0,
-        "mcp_tools": 0,
-        "tools": [],
-        "tool_names": [],
-        "message": "Tools managed by OpenClaw"
+        "total_tools": len(filtered_tools),
+        "builtin_tools": len(ALL_TOOLS),
+        "mcp_tools": 0,  # MCP removed
+        "tools": tool_details,
+        "tool_names": [t["name"] for t in tool_details]
     }

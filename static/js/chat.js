@@ -1,4 +1,6 @@
 // Chat Manager - Handles message display and streaming
+import { StreamingAudioPlayer } from './voice.js';
+
 export class ChatManager {
     constructor(app) {
         this.app = app;
@@ -11,6 +13,9 @@ export class ChatManager {
         this.currentThinkingContent = '';
         this.thinkingContainer = null;
         this.currentToolCalls = [];
+        this.openclawTTSProvided = false;  // Flag: OpenClaw sent audio via MEDIA: tag
+        this.streamingAudioPlayer = null;  // StreamingAudioPlayer instance for sentence TTS
+        this.streamingTTSActive = false;   // True when sentence-level TTS is running
 
         // Status tracking
         this.modelStatus = 'idle'; // idle, thinking, generating, using_tool
@@ -810,6 +815,13 @@ export class ChatManager {
         this.currentThinkingContent = '';
         this.thinkingContainer = null;
         this.currentToolCalls = [];
+        this.openclawTTSProvided = false;
+        // Stop previous streaming player if any, create fresh for this response
+        if (this.streamingAudioPlayer) {
+            this.streamingAudioPlayer.stop();
+            this.streamingAudioPlayer = null;
+        }
+        this.streamingTTSActive = false;
 
         const message = document.createElement('div');
         message.className = 'flex gap-4 md:gap-6 animate-fadeIn group';
@@ -1403,11 +1415,18 @@ export class ChatManager {
                 headers['X-Conversation-ID'] = this.app.currentConversationId;
             }
 
+            // Determine if we want voice response (sentence-level streaming TTS)
+            const wantVoice = this.lastInputWasVoice || (
+                this.app.voiceManager?.settings?.auto_play &&
+                this.app.voiceManager?.canPlayTTS()
+            );
+
             const requestBody = {
                 message: text,
                 images: images.length > 0 ? images : undefined,
                 think: think || undefined,
-                files: files.length > 0 ? files : undefined
+                files: files.length > 0 ? files : undefined,
+                voice_response: wantVoice || undefined
             };
             console.log('[Chat] Sending request - images:', images.length, 'image sizes:', images.map(i => i?.length || 0));
 
@@ -1538,10 +1557,9 @@ export class ChatManager {
             this.app.setCurrentConversation(data.id);
         }
 
-        // Debug context metadata
+        // Context metadata (stored but not displayed — OpenClaw handles context)
         if (data.system_prompt_length !== undefined) {
             this.currentContext = data;
-            this.appendContextDebugFrame(data);
         }
 
         // Thinking tokens
@@ -1664,6 +1682,56 @@ export class ChatManager {
             }
         }
 
+        // TTS audio from OpenClaw (piped through BrinChat) — only when NOT streaming TTS
+        if (data.tts_audio_url && data.tts_index === undefined) {
+            console.log('[Chat] Received TTS audio URL from OpenClaw:', data.tts_audio_url);
+            this.openclawTTSProvided = true;  // Flag to skip BrinChat's own TTS
+            this.playOpenClawTTS(data.tts_audio_url);
+        }
+
+        // Streaming sentence TTS chunk (URL-based, has tts_index)
+        if (data.tts_audio_url !== undefined && data.tts_index !== undefined) {
+            this.streamingTTSActive = true;
+            this.openclawTTSProvided = true;  // Prevent double-TTS at end of response
+
+            // Lazy-init the streaming audio player
+            if (!this.streamingAudioPlayer) {
+                const vm = this.app.voiceManager;
+                if (vm) {
+                    await vm.unlockAudio();
+                    const ctx = vm._audioCtxForPlayback;
+                    if (ctx) {
+                        this.streamingAudioPlayer = new StreamingAudioPlayer(ctx);
+                        console.log('[Chat] StreamingAudioPlayer initialized, ctx state:', ctx.state);
+                    } else {
+                        console.error('[Chat] No AudioContext available for StreamingAudioPlayer');
+                    }
+                }
+            }
+
+            if (this.streamingAudioPlayer) {
+                try {
+                    // Fetch audio from URL
+                    const resp = await fetch(data.tts_audio_url, { credentials: 'include' });
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    const audioBuffer = await resp.arrayBuffer();
+                    await this.streamingAudioPlayer.enqueue(audioBuffer, data.tts_index);
+                    console.log(`[Chat] TTS chunk #${data.tts_index} fetched and enqueued (${audioBuffer.byteLength} bytes)`);
+                } catch (e) {
+                    console.error(`[Chat] Failed to fetch TTS chunk #${data.tts_index}:`, e);
+                }
+            }
+        }
+
+        // Streaming TTS complete
+        if (data.tts_done) {
+            if (this.streamingAudioPlayer) {
+                this.streamingAudioPlayer.markDone();
+                console.log('[Chat] Streaming TTS done');
+            }
+            this.streamingTTSActive = false;
+        }
+
         // Message ID for actions and context section
         if (data.role === 'assistant' && data.id) {
             if (this.currentAssistantMessage) {
@@ -1711,8 +1779,13 @@ export class ChatManager {
             this.announceToScreenReader('Response received.');
 
             // Voice integration
-            console.log('[Chat] Voice check: voiceManager=', !!this.app.voiceManager, 'content=', this.currentStreamContent?.length, 'lastInputWasVoice=', this.lastInputWasVoice);
-            if (this.app.voiceManager && this.currentStreamContent) {
+            // Skip BrinChat TTS if OpenClaw already provided audio via MEDIA: tag
+            if (this.openclawTTSProvided) {
+                console.log('[Chat] OpenClaw TTS already provided — skipping BrinChat TTS');
+                this.openclawTTSProvided = false;
+                this.lastInputWasVoice = false;
+            } else if (this.app.voiceManager && this.currentStreamContent) {
+                console.log('[Chat] Voice check: voiceManager=', !!this.app.voiceManager, 'content=', this.currentStreamContent?.length, 'lastInputWasVoice=', this.lastInputWasVoice);
                 // Callback for conversation mode (voice-to-voice)
                 if (this.onResponseComplete) {
                     this.onResponseComplete(this.currentStreamContent);
@@ -1750,6 +1823,40 @@ export class ChatManager {
         }
 
         return toolIndicator;
+    }
+
+    /**
+     * Play TTS audio received from OpenClaw via MEDIA: tag passthrough.
+     * Audio is served as a file URL from the BrinChat backend.
+     */
+    async playOpenClawTTS(audioUrl) {
+        try {
+            console.log('[Chat] Playing OpenClaw TTS from:', audioUrl);
+
+            // Unlock audio context if available (for autoplay policy)
+            if (this.app.voiceManager) {
+                await this.app.voiceManager.unlockAudio();
+            }
+
+            const audio = new Audio(audioUrl);
+            audio.onended = () => {
+                console.log('[Chat] OpenClaw TTS playback completed');
+            };
+            audio.onerror = (e) => {
+                console.error('[Chat] OpenClaw TTS playback error:', e);
+            };
+
+            await audio.play();
+            console.log('[Chat] OpenClaw TTS playback started');
+        } catch (err) {
+            console.error('[Chat] Failed to play OpenClaw TTS:', err.name, err.message);
+            if (err.name === 'NotAllowedError') {
+                console.warn('[Chat] Browser autoplay blocked - user needs to interact with page first');
+                if (this.app.voiceManager) {
+                    this.app.voiceManager.showToast('Click anywhere on the page to enable voice playback, then try again.', 'warning');
+                }
+            }
+        }
     }
 
     async clearHistory() {

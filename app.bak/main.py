@@ -34,7 +34,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             response.headers["Pragma"] = "no-cache"
 
         return response
-from app.routers import admin, auth, chat, knowledge, models, settings, user_profile, voice
+from app.routers import admin, auth, chat, commands, knowledge, memory, models, settings, user_profile, voice
 from app.services.claude_service import claude_service
 
 logger = logging.getLogger(__name__)
@@ -89,7 +89,9 @@ app.mount("/avatars", StaticFiles(directory=avatars_dir), name="avatars")
 app.include_router(admin.router)
 app.include_router(auth.router)
 app.include_router(chat.router)
+app.include_router(commands.router)
 app.include_router(knowledge.router)
+app.include_router(memory.router)
 app.include_router(models.router)
 app.include_router(settings.router)
 app.include_router(user_profile.router)
@@ -178,6 +180,13 @@ async def startup_security_check():
 
     if len(config.JWT_SECRET) < 32:
         logger.warning("SECURITY WARNING: JWT_SECRET is shorter than 32 characters. Consider using a longer secret.")
+
+    if not config.ADULT_PASSCODE:
+        logger.critical("SECURITY ERROR: ADULT_PASSCODE environment variable must be set.")
+        raise RuntimeError("Application cannot start without ADULT_PASSCODE. Set ADULT_PASSCODE environment variable.")
+
+    if len(config.ADULT_PASSCODE) < 4:
+        logger.warning("SECURITY WARNING: ADULT_PASSCODE is shorter than 4 characters. Consider using a longer passcode.")
 
     # Feature availability warnings
     if not config.WEB_SEARCH_AVAILABLE:

@@ -286,6 +286,7 @@ class AuthService:
         - User database record
         """
         from app.services.conversation_store import conversation_store
+        from app.services.user_profile_store import get_user_profile_store
 
         # 1. Delete all conversations for this user
         try:
@@ -308,7 +309,16 @@ class AuthService:
         except Exception as e:
             logger.error(f"Error deleting avatars for user {user_id}: {e}")
 
-        # 3. Delete user record from database
+        # 3. Clear session unlock state
+        try:
+            profile_store = get_user_profile_store()
+            cleared = profile_store.clear_user_sessions(user_id)
+            if cleared > 0:
+                logger.info(f"Cleared {cleared} session unlock(s) for user {user_id}")
+        except Exception as e:
+            logger.error(f"Error clearing sessions for user {user_id}: {e}")
+
+        # 4. Delete user record from database
         self.db.execute("DELETE FROM users WHERE id = ?", (user_id,))
         logger.info(f"Deleted user {user_id} from database")
 

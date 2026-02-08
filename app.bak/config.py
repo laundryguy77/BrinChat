@@ -69,6 +69,48 @@ DECK_BACKLOG_STACK_ID = int(os.getenv("DECK_BACKLOG_STACK_ID", "5"))
 # Legacy: Keep OLLAMA_BASE_URL for embedding service (knowledge base still uses Ollama for embeddings)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
+# === Uncensored Mode Models ===
+# Generic naming - swap models easily as hardware improves
+
+# Chat model - main conversational AI for uncensored mode
+UNCENSORED_CHAT_MODEL = os.getenv(
+    "UNCENSORED_CHAT_MODEL",
+    os.getenv("LEXI_MODEL", "taozhiyuai/llama-3-8b-lexi-uncensored:v1_q8_0")
+)
+UNCENSORED_BASE_URL = os.getenv(
+    "UNCENSORED_BASE_URL",
+    os.getenv("LEXI_BASE_URL", "http://localhost:11434")
+)
+UNCENSORED_TIMEOUT = int(os.getenv("UNCENSORED_TIMEOUT", "60"))
+
+# Tool model - decides which tool to use (fast, small, doesn't need uncensored)
+UNCENSORED_TOOL_MODEL = os.getenv(
+    "UNCENSORED_TOOL_MODEL",
+    os.getenv("OMEGA_TOOL_MODEL", "ministral-3:latest")
+)
+UNCENSORED_TOOL_TIMEOUT = int(os.getenv("UNCENSORED_TOOL_TIMEOUT", "30"))
+
+# Vision model - describes images (must have vision capability)
+UNCENSORED_VISION_MODEL = os.getenv(
+    "UNCENSORED_VISION_MODEL",
+    os.getenv("OMEGA_VISION_MODEL", "huihui_ai/qwen3-vl-abliterated:latest")
+)
+UNCENSORED_VISION_TIMEOUT = int(os.getenv("UNCENSORED_VISION_TIMEOUT", "30"))
+
+# === Legacy Aliases (backwards compatibility) ===
+LEXI_MODEL = UNCENSORED_CHAT_MODEL
+LEXI_BASE_URL = UNCENSORED_BASE_URL
+OMEGA_TOOL_MODEL = UNCENSORED_TOOL_MODEL
+OMEGA_TOOL_BASE_URL = UNCENSORED_BASE_URL
+OMEGA_TOOL_TIMEOUT = UNCENSORED_TOOL_TIMEOUT
+OMEGA_VISION_MODEL = UNCENSORED_VISION_MODEL
+OMEGA_VISION_BASE_URL = UNCENSORED_BASE_URL
+OMEGA_VISION_TIMEOUT = UNCENSORED_VISION_TIMEOUT
+OLLAMA_CHAT_MODEL = UNCENSORED_CHAT_MODEL
+OMEGA_MODEL = UNCENSORED_TOOL_MODEL
+OMEGA_BASE_URL = UNCENSORED_BASE_URL
+OMEGA_TIMEOUT = UNCENSORED_TOOL_TIMEOUT
+
 # Brave Search API
 BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "")
 
@@ -103,6 +145,13 @@ TRUSTED_PROXIES = [p.strip() for p in os.getenv("TRUSTED_PROXIES", "").split(","
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 VIDEO_GENERATION_SPACE = os.getenv("VIDEO_GENERATION_SPACE", "Heartsync/NSFW-Uncensored-video")
 
+# Adult content passcode (MUST be set in environment for security)
+ADULT_PASSCODE = os.getenv("ADULT_PASSCODE", "")
+
+# Tool trigger scanner: when enabled, adult mode scans messages for tool-like requests
+# (image generation, web search, etc.) and routes them to Brin instead of Lexi
+TOOL_TRIGGER_ENABLED = os.getenv("TOOL_TRIGGER_ENABLED", "true").lower() == "true"
+
 # Chat streaming limits
 # Soft limits: Log warning but continue streaming (model may need extended thinking for complex problems)
 THINKING_TOKEN_LIMIT_INITIAL = int(os.getenv("THINKING_TOKEN_LIMIT_INITIAL", "3000"))
@@ -111,6 +160,11 @@ THINKING_TOKEN_LIMIT_FOLLOWUP = int(os.getenv("THINKING_TOKEN_LIMIT_FOLLOWUP", "
 THINKING_HARD_LIMIT_INITIAL = int(os.getenv("THINKING_HARD_LIMIT_INITIAL", "30000"))
 THINKING_HARD_LIMIT_FOLLOWUP = int(os.getenv("THINKING_HARD_LIMIT_FOLLOWUP", "20000"))
 CHAT_REQUEST_TIMEOUT = int(os.getenv("CHAT_REQUEST_TIMEOUT", "300"))  # 5 minutes
+
+# Extraction model for async memory/profile updates (small, fast model)
+# This model runs in background after responses to extract memories and profile updates
+EXTRACTION_ENABLED = os.getenv("EXTRACTION_ENABLED", "false").lower() == "true"
+EXTRACTION_MODEL = os.getenv("EXTRACTION_MODEL", "qwen2.5-coder:3b")
 
 # =============================================================================
 # Voice Features (TTS/STT)

@@ -8,6 +8,7 @@ from app.middleware.auth import require_auth
 from app.models.auth_schemas import UserResponse
 from app.services.database import get_database
 from app.services.admin_service import get_admin_service
+from app.services.feature_service import get_feature_service
 from app.services.theme_service import get_theme_service
 from app.services.stats_service import get_stats_service
 
