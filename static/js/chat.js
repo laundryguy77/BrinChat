@@ -16,6 +16,10 @@ export class ChatManager {
         this.openclawTTSProvided = false;  // Flag: OpenClaw sent audio via MEDIA: tag
         this.streamingAudioPlayer = null;  // StreamingAudioPlayer instance for sentence TTS
         this.streamingTTSActive = false;   // True when sentence-level TTS is running
+        this.ttsPreFetchQueue = [];        // Queue of TTS chunks being pre-fetched
+        this.ttsFetchedChunks = new Map(); // Map of index -> ArrayBuffer for pre-fetched audio
+        this.ttsCompletionPromise = null;  // Promise that resolves when TTS playback completes
+        this.ttsCompletionResolve = null;  // Resolver for TTS completion promise
 
         // Status tracking
         this.modelStatus = 'idle'; // idle, thinking, generating, using_tool
@@ -30,6 +34,10 @@ export class ChatManager {
         this.messageQueue = [];
         this.isProcessingQueue = false;
 
+        // Generation counter - prevents old stream's finally block from
+        // clobbering state when a new stream starts at text_complete
+        this._generationId = 0;
+
         this.initializeMarkdown();
         this.initializeStatusBar();
         this.initializeScrollButton();
@@ -37,6 +45,12 @@ export class ChatManager {
 
         // Track if last user message was voice input (for auto-TTS response)
         this.lastInputWasVoice = false;
+
+        // Track conversation mode state (set by voice.js)
+        this.isConversationMode = false;
+
+        // Cache assistant name to avoid repeated lookups
+        this.cachedAssistantName = null;
     }
     
     /**
@@ -44,6 +58,53 @@ export class ChatManager {
      */
     setVoiceInput(isVoice) {
         this.lastInputWasVoice = isVoice;
+    }
+
+    /**
+     * Set conversation mode state (called by voice.js)
+     */
+    setConversationMode(enabled) {
+        this.isConversationMode = enabled;
+        console.log(`[Chat] Conversation mode ${enabled ? 'enabled' : 'disabled'}`);
+    }
+
+    /**
+     * Pre-fetch TTS audio chunk in the background
+     * @param {string} url - The URL to fetch
+     * @param {number} index - Sequence number of this chunk
+     * @returns {Promise<ArrayBuffer>} - The audio data
+     */
+    async preFetchTTSAudio(url, index) {
+        // Skip if already fetched
+        if (this.ttsFetchedChunks.has(index)) {
+            return this.ttsFetchedChunks.get(index);
+        }
+
+        console.debug(`[Chat] Pre-fetching TTS chunk #${index} from ${url}`);
+
+        const promise = fetch(url, { credentials: 'include' })
+            .then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return r.arrayBuffer();
+            })
+            .then(arrayBuffer => {
+                this.ttsFetchedChunks.set(index, arrayBuffer);
+                console.debug(`[Chat] Pre-fetched TTS chunk #${index} (${arrayBuffer.byteLength} bytes)`);
+
+                // If the audio player exists, enqueue immediately
+                if (this.streamingAudioPlayer) {
+                    this.streamingAudioPlayer.enqueue(arrayBuffer, index);
+                }
+
+                return arrayBuffer;
+            })
+            .catch(e => {
+                console.error(`[Chat] Failed to pre-fetch TTS chunk #${index}:`, e);
+                throw e;
+            });
+
+        this.ttsPreFetchQueue.push({ index, url, promise });
+        return promise;
     }
 
     /**
@@ -92,15 +153,19 @@ export class ChatManager {
                 hiddenAt = Date.now();
                 wasStreaming = this.isStreaming;
                 streamingConvId = this.app.currentConversationId;
-                console.log('[Mobile] Page hidden, wasStreaming:', wasStreaming);
+                console.debug('[Mobile] Page hidden, wasStreaming:', wasStreaming);
             } else if (document.visibilityState === 'visible') {
                 const hiddenDuration = hiddenAt ? Date.now() - hiddenAt : 0;
-                console.log('[Mobile] Page visible after', Math.round(hiddenDuration / 1000), 'seconds');
+                console.debug('[Mobile] Page visible after', Math.round(hiddenDuration / 1000), 'seconds');
 
                 // If we were streaming and were hidden for more than 2 seconds, assume stream broke
-                if (wasStreaming && hiddenDuration > 2000 && streamingConvId) {
+                // Don't abort conversation mode streams - they handle their own recovery
+                if (wasStreaming && hiddenDuration > 2000 && streamingConvId && !this.isConversationMode) {
                     console.log('[Mobile] Stream likely interrupted, recovering...');
                     await this.handleStreamRecovery(streamingConvId);
+                } else if (this.isConversationMode && wasStreaming) {
+                    // Log but don't abort - conversation mode is resilient
+                    console.debug('[Mobile] Page hidden during conversation mode, stream continuing');
                 }
                 
                 hiddenAt = null;
@@ -112,7 +177,7 @@ export class ChatManager {
         // Also handle page hide for cleanup
         window.addEventListener('pagehide', () => {
             if (this.isStreaming) {
-                console.log('[Mobile] Page hiding during stream');
+                console.debug('[Mobile] Page hiding during stream');
             }
         });
     }
@@ -421,7 +486,7 @@ export class ChatManager {
      * Create an expandable context section showing thinking, memories, and tools
      */
     createContextSection(metadata) {
-        console.log('[Context] Creating context section with:', {
+        console.debug('[Context] Creating context section with:', {
             hasThinking: !!metadata.thinking_content,
             thinkingLength: metadata.thinking_content?.length || 0,
             thinkingPreview: metadata.thinking_content?.substring(0, 100) || '(none)',
@@ -565,7 +630,7 @@ export class ChatManager {
 
         // Assistant header
         if (!isUser) {
-            const assistantName = this.app.getAssistantName();
+            const assistantName = this.cachedAssistantName || (this.cachedAssistantName = this.app.getAssistantName());
             const header = document.createElement('div');
             header.className = 'flex items-center gap-2 mb-1 assistant-header';
             header.innerHTML = `
@@ -681,7 +746,7 @@ export class ChatManager {
                 e.stopPropagation();
                 // For assistant messages, copy the rendered text content, not raw markdown
                 const textToCopy = contentEl.textContent || messageContent;
-                console.log('[Copy] Copying assistant message rendered text, length:', textToCopy.length);
+                console.debug('[Copy] Copying assistant message rendered text, length:', textToCopy.length);
                 chatManager.copyToClipboard(textToCopy, copyBtn);
             };
             actions.appendChild(copyBtn);
@@ -759,7 +824,7 @@ export class ChatManager {
                 tools_available: msg.tools_available
             };
             if (msg.role === 'assistant' && (metadata.thinking_content || metadata.memories_used || metadata.tools_available)) {
-                console.log('[Render] Message has context metadata:', {
+                console.debug('[Render] Message has context metadata:', {
                     id: msg.id,
                     hasThinking: !!metadata.thinking_content,
                     memoriesCount: metadata.memories_used?.length || 0,
@@ -823,6 +888,13 @@ export class ChatManager {
         }
         this.streamingTTSActive = false;
 
+        // Clear any pending TTS completion promise
+        if (this.ttsCompletionResolve) {
+            this.ttsCompletionResolve();
+            this.ttsCompletionResolve = null;
+            this.ttsCompletionPromise = null;
+        }
+
         const message = document.createElement('div');
         message.className = 'flex gap-4 md:gap-6 animate-fadeIn group';
 
@@ -836,7 +908,7 @@ export class ChatManager {
         bubbleContainer.className = 'flex-1 min-w-0 space-y-2';
 
         // Header
-        const assistantName = this.app.getAssistantName();
+        const assistantName = this.cachedAssistantName || (this.cachedAssistantName = this.app.getAssistantName());
         const header = document.createElement('div');
         header.className = 'flex items-center gap-2 mb-1 assistant-header';
         header.innerHTML = `
@@ -883,12 +955,12 @@ export class ChatManager {
 
         const typing = this.currentAssistantMessage.contentEl.querySelector('.typing-indicator');
         if (typing) {
-            console.log('[Stream] Removing typing indicator, starting content render');
+            console.debug('[Stream] Removing typing indicator, starting content render');
             typing.remove();
         }
 
         this.currentStreamContent += text;
-        console.log('[Stream] Total content now:', this.currentStreamContent.length, 'chars');
+        console.debug('[Stream] Total content now:', this.currentStreamContent.length, 'chars');
         this.currentAssistantMessage.contentEl.innerHTML = this.renderMarkdown(this.currentStreamContent);
         this.scrollToBottom();
     }
@@ -903,7 +975,7 @@ export class ChatManager {
         if (typing) typing.remove();
 
         if (!this.thinkingContainer) {
-            console.log('[Stream] Creating thinking container');
+            console.debug('[Stream] Creating thinking container');
             this.thinkingContainer = document.createElement('div');
             this.thinkingContainer.className = 'mb-4';
             this.thinkingContainer.innerHTML = `
@@ -920,7 +992,7 @@ export class ChatManager {
         }
 
         this.currentThinkingContent += text;
-        console.log('[Stream] Thinking content now:', this.currentThinkingContent.length, 'chars');
+        console.debug('[Stream] Thinking content now:', this.currentThinkingContent.length, 'chars');
         this.thinkingContainer.querySelector('.thinking-content').textContent = this.currentThinkingContent;
         this.scrollToBottom();
     }
@@ -1159,7 +1231,7 @@ export class ChatManager {
             e.stopPropagation();
             // Copy the rendered text content, not raw markdown
             const textToCopy = contentEl.textContent || '';
-            console.log('[Copy] Copying streamed message rendered text, length:', textToCopy.length);
+            console.debug('[Copy] Copying streamed message rendered text, length:', textToCopy.length);
             chatManager.copyToClipboard(textToCopy, copyBtn);
         };
 
@@ -1375,9 +1447,16 @@ export class ChatManager {
         // Queue message if a response is currently in-flight.
         // We key off BOTH isStreaming and abortController to avoid accidental parallel streams.
         if (this.isStreaming || (this.abortController && !this.abortController.signal.aborted)) {
-            this.messageQueue.push({ text, images, imageDataUrls, think, files });
+            this.messageQueue.push({
+                text,
+                images,
+                imageDataUrls,
+                think,
+                files,
+                isVoice: this.lastInputWasVoice  // Preserve voice context
+            });
             const queuePos = this.messageQueue.length;
-            console.log(`[Chat] Message queued (position ${queuePos}):`, text.substring(0, 50));
+            console.log(`[Chat] Message queued (position ${queuePos}, voice: ${this.lastInputWasVoice}):`, text.substring(0, 50));
             this.showToast(`Message queued (${queuePos} waiting)`, 'info', 2000);
             return;
         }
@@ -1398,6 +1477,10 @@ export class ChatManager {
 
         // Create abort controller for this request
         this.abortController = new AbortController();
+
+        // Track which generation this is so the finally block only
+        // cleans up if no newer generation has started.
+        const myGenId = ++this._generationId;
 
         // Update status to show we're starting
         this.updateModelStatus(think ? 'thinking' : 'generating');
@@ -1428,7 +1511,7 @@ export class ChatManager {
                 files: files.length > 0 ? files : undefined,
                 voice_response: wantVoice || undefined
             };
-            console.log('[Chat] Sending request - images:', images.length, 'image sizes:', images.map(i => i?.length || 0));
+            console.debug('[Chat] Sending request - images:', images.length, 'image sizes:', images.map(i => i?.length || 0));
 
             const response = await fetch('/api/chat', {
                 method: 'POST',
@@ -1447,15 +1530,20 @@ export class ChatManager {
                 this.appendToAssistantMessage(`Error: ${error.message}`);
             }
         } finally {
-            this.isStreaming = false;
-            this.userIsScrolling = false; // Reset scroll control
-            this.currentAssistantMessage = null;
-            this.abortController = null;
-            this.updateModelStatus('idle');
-            if (sendBtn) sendBtn.disabled = false;
+            // Only clean up if this is still the active generation.
+            // When text_complete starts a new message (via processMessageQueue),
+            // the old stream's finally must NOT clobber the new stream's state.
+            if (this._generationId === myGenId) {
+                this.isStreaming = false;
+                this.userIsScrolling = false; // Reset scroll control
+                this.currentAssistantMessage = null;
+                this.abortController = null;
+                this.updateModelStatus('idle');
+                if (sendBtn) sendBtn.disabled = false;
 
-            // Process any queued messages
-            this.processMessageQueue();
+                // Process any queued messages
+                this.processMessageQueue();
+            }
         }
     }
 
@@ -1471,10 +1559,15 @@ export class ChatManager {
 
         while (this.messageQueue.length > 0 && !this.isStreaming) {
             const msg = this.messageQueue.shift();
-            console.log(`[Chat] Processing queued message (${this.messageQueue.length} remaining):`, msg.text.substring(0, 50));
+            console.log(`[Chat] Processing queued message (${this.messageQueue.length} remaining, voice: ${msg.isVoice}):`, msg.text.substring(0, 50));
 
             // Small delay to let UI settle
             await new Promise(resolve => setTimeout(resolve, 100));
+
+            // Restore voice context for this message
+            if (msg.isVoice) {
+                this.setVoiceInput(true);
+            }
 
             // Send the queued message
             await this.sendMessage(msg.text, msg.images, msg.imageDataUrls, msg.think, msg.files);
@@ -1490,6 +1583,9 @@ export class ChatManager {
         let toolIndicator = null;
         let lastActivityTime = Date.now();
         const STREAM_TIMEOUT = 120000; // 2 minutes max idle time
+        // Snapshot generation ID so late events from this stream can be ignored
+        // if a new generation has started (e.g., after text_complete drains queue)
+        const streamGenId = this._generationId;
 
         try {
             while (true) {
@@ -1508,9 +1604,15 @@ export class ChatManager {
                 const lines = buffer.split('\n');
                 buffer = lines.pop() || '';
 
+                let streamDone = false;
                 for (const line of lines) {
                     if (line.startsWith('event:')) {
-                        console.log('[SSE] Event line:', line);
+                        const eventType = line.slice(6).trim();
+                        console.debug('[SSE] Event line:', eventType);
+                        if (eventType === 'done') {
+                            console.debug('[SSE] Received done event — stream complete');
+                            streamDone = true;
+                        }
                         continue;
                     }
                     if (line.startsWith('data:')) {
@@ -1518,8 +1620,8 @@ export class ChatManager {
                         if (!dataStr) continue;
                         try {
                             const data = JSON.parse(dataStr);
-                            console.log('[SSE] Parsed data:', Object.keys(data));
-                            toolIndicator = await this.handleSSEEvent(data, toolIndicator);
+                            console.debug('[SSE] Parsed data:', Object.keys(data));
+                            toolIndicator = await this.handleSSEEvent(data, toolIndicator, streamGenId);
                         } catch (e) {
                             // Log malformed SSE data for debugging but continue processing
                             console.warn('[SSE] Malformed SSE data, skipping:', dataStr.substring(0, 100), e);
@@ -1527,10 +1629,11 @@ export class ChatManager {
                         }
                     }
                 }
+                if (streamDone) break;
             }
 
             // Log when SSE stream completes
-            console.log('[SSE] Stream completed');
+            console.debug('[SSE] Stream completed');
         } catch (error) {
             // Handle network errors during streaming
             if (error.name === 'TypeError' && error.message.includes('network')) {
@@ -1551,8 +1654,13 @@ export class ChatManager {
         }
     }
 
-    async handleSSEEvent(data, toolIndicator) {
-        // Conversation ID
+    async handleSSEEvent(data, toolIndicator, streamGenId) {
+        // If a newer generation has started, ignore late events from this stream.
+        // This happens when text_complete drains the queue and starts a new sendMessage()
+        // while this old SSE stream is still delivering tts_done / finish_reason events.
+        const isStaleStream = (streamGenId !== undefined && streamGenId !== this._generationId);
+
+        // Conversation ID — always accept (it's metadata about this message)
         if (data.id !== undefined && data.id && !data.role) {
             this.app.setCurrentConversation(data.id);
         }
@@ -1564,7 +1672,7 @@ export class ChatManager {
 
         // Thinking tokens
         if (data.thinking !== undefined) {
-            console.log('[SSE] Thinking token received:', data.thinking.length, 'chars');
+            console.debug('[SSE] Thinking token received:', data.thinking.length, 'chars');
             this.updateModelStatus('thinking');
             this.appendThinkingContent(data.thinking);
         }
@@ -1577,7 +1685,7 @@ export class ChatManager {
 
         // Content tokens
         if (data.content !== undefined) {
-            console.log('[SSE] Content token received:', data.content.length, 'chars, preview:', data.content.substring(0, 50));
+            console.debug('[SSE] Content token received:', data.content.length, 'chars, preview:', data.content.substring(0, 50));
             this.updateModelStatus('generating');
             this.appendToAssistantMessage(data.content);
 
@@ -1664,13 +1772,13 @@ export class ChatManager {
 
         // Info/warning messages from server
         if (data.message !== undefined && (data.type === 'info' || data.type === 'warning')) {
-            console.log(`[SSE] ${data.type}: ${data.message}`);
+            console.debug(`[SSE] ${data.type}: ${data.message}`);
             this.showToast(data.message, data.type, 3000);
         }
 
         // Content replacement (replaces displayed content after stripping [MEMORY] tags)
         if (data.replace_content !== undefined) {
-            console.log('[SSE] Content replacement received, stripping memory tags from display');
+            console.debug('[SSE] Content replacement received, stripping memory tags from display');
             if (this.currentAssistantMessage?.bubbleContainer) {
                 const bubble = this.currentAssistantMessage.bubbleContainer.querySelector('.rounded-2xl .prose');
                 if (bubble) {
@@ -1684,15 +1792,24 @@ export class ChatManager {
 
         // TTS audio from OpenClaw (piped through BrinChat) — only when NOT streaming TTS
         if (data.tts_audio_url && data.tts_index === undefined) {
-            console.log('[Chat] Received TTS audio URL from OpenClaw:', data.tts_audio_url);
+            console.debug('[Chat] Received TTS audio URL from OpenClaw:', data.tts_audio_url);
             this.openclawTTSProvided = true;  // Flag to skip BrinChat's own TTS
             this.playOpenClawTTS(data.tts_audio_url);
         }
 
         // Streaming sentence TTS chunk (URL-based, has tts_index)
-        if (data.tts_audio_url !== undefined && data.tts_index !== undefined) {
+        // Guard: ignore TTS events from stale streams so they don't interfere
+        // with a new generation's audio player
+        if (data.tts_audio_url !== undefined && data.tts_index !== undefined && !isStaleStream) {
             this.streamingTTSActive = true;
             this.openclawTTSProvided = true;  // Prevent double-TTS at end of response
+
+            // Create promise for TTS completion if not already created
+            if (!this.ttsCompletionPromise) {
+                this.ttsCompletionPromise = new Promise((resolve) => {
+                    this.ttsCompletionResolve = resolve;
+                });
+            }
 
             // Lazy-init the streaming audio player
             if (!this.streamingAudioPlayer) {
@@ -1701,35 +1818,59 @@ export class ChatManager {
                     await vm.unlockAudio();
                     const ctx = vm._audioCtxForPlayback;
                     if (ctx) {
-                        this.streamingAudioPlayer = new StreamingAudioPlayer(ctx);
-                        console.log('[Chat] StreamingAudioPlayer initialized, ctx state:', ctx.state);
+                        this.streamingAudioPlayer = new StreamingAudioPlayer(ctx, () => {
+                            // onEnded callback
+                            console.debug('[Chat] Streaming TTS playback completed');
+                            if (this.ttsCompletionResolve) {
+                                this.ttsCompletionResolve();
+                                this.ttsCompletionResolve = null;
+                                this.ttsCompletionPromise = null;
+                            }
+                        });
+                        console.debug('[Chat] StreamingAudioPlayer initialized, ctx state:', ctx.state);
                     } else {
                         console.error('[Chat] No AudioContext available for StreamingAudioPlayer');
                     }
                 }
             }
 
-            if (this.streamingAudioPlayer) {
-                try {
-                    // Fetch audio from URL
-                    const resp = await fetch(data.tts_audio_url, { credentials: 'include' });
-                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                    const audioBuffer = await resp.arrayBuffer();
-                    await this.streamingAudioPlayer.enqueue(audioBuffer, data.tts_index);
-                    console.log(`[Chat] TTS chunk #${data.tts_index} fetched and enqueued (${audioBuffer.byteLength} bytes)`);
-                } catch (e) {
-                    console.error(`[Chat] Failed to fetch TTS chunk #${data.tts_index}:`, e);
-                }
-            }
+            // Pre-fetch audio chunk in the background (non-blocking)
+            // This allows parallel fetching of multiple chunks
+            this.preFetchTTSAudio(data.tts_audio_url, data.tts_index).catch(e => {
+                console.error(`[Chat] Pre-fetch failed for TTS chunk #${data.tts_index}:`, e);
+            });
         }
 
         // Streaming TTS complete
-        if (data.tts_done) {
+        // Text content complete (TTS still in progress) — hide the
+        // "Generating..." banner so the user can type the next message
+        // without accidentally aborting the stream.
+        if (data.text_complete && !isStaleStream) {
+            console.log('[Chat] Text complete — hiding generating banner, allowing new messages');
+            this.updateModelStatus('idle');
+            this.isStreaming = false;  // Allow new messages while TTS finishes
+            // Clear the abort controller reference so the queue gate
+            // (which checks abortController) also unblocks.  The SSE
+            // stream stays open for TTS events but we no longer need
+            // to block new user messages.
+            this.abortController = null;
+            // In conversation mode, DON'T drain the queue here — conversation
+            // mode has its own pacing via onResponseComplete that fires after
+            // TTS playback completes. Draining here would start a new stream
+            // while TTS is still playing and the old stream is still delivering events.
+            if (!this.isConversationMode) {
+                this.processMessageQueue();
+            }
+        }
+
+        if (data.tts_done && !isStaleStream) {
             if (this.streamingAudioPlayer) {
                 this.streamingAudioPlayer.markDone();
-                console.log('[Chat] Streaming TTS done');
+                console.debug('[Chat] Streaming TTS done');
             }
             this.streamingTTSActive = false;
+        } else if (data.tts_done && isStaleStream) {
+            console.debug('[Chat] Ignoring tts_done from stale stream (genId:', streamGenId, 'current:', this._generationId, ')');
         }
 
         // Message ID for actions and context section
@@ -1771,40 +1912,60 @@ export class ChatManager {
 
         // Done
         if (data.finish_reason !== undefined) {
-            console.log('[Chat] finish_reason received:', data.finish_reason);
+            console.debug('[Chat] finish_reason received:', data.finish_reason, isStaleStream ? '(STALE - ignoring voice/callbacks)' : '');
             // Stream completed - refresh VRAM gauge
             this.app.updateUsageGauges();
+
+            // If this is a stale stream, skip voice/callback handling
+            if (isStaleStream) {
+                return toolIndicator;
+            }
             
             // Announce to screen readers
             this.announceToScreenReader('Response received.');
 
             // Voice integration
-            // Skip BrinChat TTS if OpenClaw already provided audio via MEDIA: tag
-            if (this.openclawTTSProvided) {
-                console.log('[Chat] OpenClaw TTS already provided — skipping BrinChat TTS');
-                this.openclawTTSProvided = false;
-                this.lastInputWasVoice = false;
-            } else if (this.app.voiceManager && this.currentStreamContent) {
-                console.log('[Chat] Voice check: voiceManager=', !!this.app.voiceManager, 'content=', this.currentStreamContent?.length, 'lastInputWasVoice=', this.lastInputWasVoice);
-                // Callback for conversation mode (voice-to-voice)
+            if (this.app.voiceManager && this.currentStreamContent) {
+                console.debug('[Chat] Voice check: voiceManager=', !!this.app.voiceManager, 'content=', this.currentStreamContent?.length, 'lastInputWasVoice=', this.lastInputWasVoice, 'openclawTTSProvided=', this.openclawTTSProvided);
+
+                // Callback for conversation mode (voice-to-voice) - ALWAYS call this
                 if (this.onResponseComplete) {
-                    this.onResponseComplete(this.currentStreamContent);
-                    this.onResponseComplete = null;
+                    // If TTS is active, wait for it to complete before calling callback
+                    if (this.ttsCompletionPromise) {
+                        console.debug('[Chat] Waiting for TTS to complete before calling onResponseComplete');
+                        this.ttsCompletionPromise.then(() => {
+                            if (this.onResponseComplete) {
+                                this.onResponseComplete(this.currentStreamContent);
+                                this.onResponseComplete = null;
+                            }
+                        });
+                    } else {
+                        // No TTS, call immediately
+                        this.onResponseComplete(this.currentStreamContent);
+                        this.onResponseComplete = null;
+                    }
                 }
-                
-                // Auto-speak the response if:
-                // 1. Global auto_play is enabled, OR
-                // 2. The last input was voice (voice-in = voice-out)
-                if (this.lastInputWasVoice) {
-                    console.log('[Chat] Voice input detected, auto-speaking response (forced TTS)');
-                    this.app.voiceManager.speakText(this.currentStreamContent, true);
-                    this.lastInputWasVoice = false; // Reset for next message
+
+                // Skip BrinChat TTS if streaming TTS already provided audio
+                if (this.openclawTTSProvided) {
+                    console.debug('[Chat] Streaming TTS already provided — skipping end-of-response TTS');
+                    this.openclawTTSProvided = false;
+                    this.lastInputWasVoice = false;
                 } else {
-                    console.log('[Chat] No voice input, calling autoSpeak');
-                    this.app.voiceManager.autoSpeak(this.currentStreamContent);
+                    // Auto-speak the response if:
+                    // 1. Global auto_play is enabled, OR
+                    // 2. The last input was voice (voice-in = voice-out)
+                    if (this.lastInputWasVoice) {
+                        console.debug('[Chat] Voice input detected, auto-speaking response (forced TTS)');
+                        this.app.voiceManager.speakText(this.currentStreamContent, true);
+                        this.lastInputWasVoice = false; // Reset for next message
+                    } else {
+                        console.debug('[Chat] No voice input, calling autoSpeak');
+                        this.app.voiceManager.autoSpeak(this.currentStreamContent);
+                    }
                 }
             } else {
-                console.log('[Chat] TTS skipped - voiceManager:', !!this.app.voiceManager, 'content:', !!this.currentStreamContent);
+                console.debug('[Chat] TTS skipped - voiceManager:', !!this.app.voiceManager, 'content:', !!this.currentStreamContent);
             }
         }
 
@@ -1831,7 +1992,7 @@ export class ChatManager {
      */
     async playOpenClawTTS(audioUrl) {
         try {
-            console.log('[Chat] Playing OpenClaw TTS from:', audioUrl);
+            console.debug('[Chat] Playing OpenClaw TTS from:', audioUrl);
 
             // Unlock audio context if available (for autoplay policy)
             if (this.app.voiceManager) {
@@ -1840,14 +2001,14 @@ export class ChatManager {
 
             const audio = new Audio(audioUrl);
             audio.onended = () => {
-                console.log('[Chat] OpenClaw TTS playback completed');
+                console.debug('[Chat] OpenClaw TTS playback completed');
             };
             audio.onerror = (e) => {
                 console.error('[Chat] OpenClaw TTS playback error:', e);
             };
 
             await audio.play();
-            console.log('[Chat] OpenClaw TTS playback started');
+            console.debug('[Chat] OpenClaw TTS playback started');
         } catch (err) {
             console.error('[Chat] Failed to play OpenClaw TTS:', err.name, err.message);
             if (err.name === 'NotAllowedError') {
