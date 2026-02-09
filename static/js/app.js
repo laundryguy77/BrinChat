@@ -147,11 +147,11 @@ class App {
         // New tabs are handled by authManager via localStorage session marker.
         const storedConvId = sessionStorage.getItem('currentConversationId') || localStorage.getItem('brinchat_last_conversation_id');
         if (storedConvId) {
-            console.log('[Init] Restoring last conversation ID:', storedConvId);
+            console.debug('[Init] Restoring last conversation ID:', storedConvId);
             // loadConversation() will set currentConversationId and render messages
             await this.loadConversation(storedConvId);
         } else {
-            console.log('[Init] No stored conversation ID; starting fresh');
+            console.debug('[Init] No stored conversation ID; starting fresh');
             this.currentConversationId = null;
         }
 
@@ -167,7 +167,7 @@ class App {
             window.visualViewport.addEventListener('resize', () => this.updateViewportHeight());
         }
 
-        console.log('App initialized');
+        console.debug('App initialized');
     }
 
     handleAuthChange(user) {
@@ -411,11 +411,12 @@ class App {
             btn.classList.remove('hidden');
             btn.classList.add('flex');
         }
-        // On desktop, collapse sidebar to hamburger button width (64px)
+        // On desktop, fully collapse sidebar to 0 width
         if (sidebar && !this.isMobileView) {
-            sidebar.style.width = '64px';
-            sidebar.style.minWidth = '64px';
+            sidebar.style.width = '0';
+            sidebar.style.minWidth = '0';
             sidebar.style.overflow = 'hidden';
+            sidebar.style.borderRight = 'none';
         }
         // Expand content area when sidebar is collapsed
         this.expandContentArea();
@@ -433,6 +434,7 @@ class App {
             sidebar.style.width = '';
             sidebar.style.minWidth = '';
             sidebar.style.overflow = '';
+            sidebar.style.borderRight = '';
         }
         // Restore normal content width when sidebar is visible
         this.restoreContentArea();
@@ -442,10 +444,7 @@ class App {
         const main = document.querySelector('main');
         const messageList = document.getElementById('message-list');
         const inputContainer = document.getElementById('input-container');
-        // Add right padding to balance the 64px collapsed sidebar
-        if (main && !this.isMobileView) {
-            main.style.paddingRight = '64px';
-        }
+        // No padding needed - sidebar collapses to 0 width
         // Remove max-width constraint or expand it
         if (messageList) {
             messageList.classList.remove('max-w-4xl');
@@ -1316,7 +1315,7 @@ class App {
                         break;
                     }
 
-                    console.log('[Paste] Processing image:', blob.type, blob.size, 'bytes');
+                    console.debug('[Paste] Processing image:', blob.type, blob.size, 'bytes');
 
                     const reader = new FileReader();
 
@@ -1347,7 +1346,7 @@ class App {
                         });
                         this.updateImagePreviews();
                         window.chatManager?.showToast('Image pasted from clipboard', 'success');
-                        console.log('[Paste] Image added successfully');
+                        console.debug('[Paste] Image added successfully');
                     };
 
                     reader.readAsDataURL(blob);
@@ -1450,7 +1449,6 @@ class App {
      */
     updateAssistantName(name) {
         const displayName = name || 'BrinChat';
-        console.log('[AssistantName] Updating assistant name to:', displayName);
 
         // Update sidebar header
         const sidebarHeader = document.querySelector('#sidebar h2.font-display');
@@ -1484,13 +1482,16 @@ class App {
      * Get the current assistant name
      */
     getAssistantName() {
-        // Try to get from profileManager first, fall back to cached value or default
+        // Return cached value if available
+        if (this.assistantName) return this.assistantName;
+        // Try to get from profileManager, cache the result
         if (typeof profileManager !== 'undefined' && profileManager.getAssistantName) {
             const name = profileManager.getAssistantName();
-            console.log('[AssistantName] getAssistantName() from profile:', name);
-            return name;
+            if (name) {
+                this.assistantName = name;
+                return name;
+            }
         }
-        console.log('[AssistantName] getAssistantName() fallback:', this.assistantName || 'BrinChat');
         return this.assistantName || 'BrinChat';
     }
 
@@ -1552,7 +1553,7 @@ class App {
         Array.from(files).forEach(file => {
             // Skip if file with same name already exists
             if (this.pendingImages.some(img => img.name === file.name)) {
-                console.log('[ImageUpload] Skipping duplicate:', file.name);
+                console.debug('[ImageUpload] Skipping duplicate:', file.name);
                 return;
             }
 
@@ -1563,7 +1564,7 @@ class App {
                 return;
             }
 
-            console.log('[ImageUpload] Processing:', file.name, file.type, file.size, 'bytes');
+            console.debug('[ImageUpload] Processing:', file.name, file.type, file.size, 'bytes');
 
             const reader = new FileReader();
 
@@ -1594,7 +1595,7 @@ class App {
                 });
                 this.updateImagePreviews();
                 window.chatManager?.showToast(`Image "${file.name}" added`, 'success');
-                console.log('[ImageUpload] Image added successfully:', file.name);
+                console.debug('[ImageUpload] Image added successfully:', file.name);
             };
 
             reader.readAsDataURL(file);
@@ -1627,7 +1628,7 @@ class App {
         Array.from(files).forEach(file => {
             // Skip if file with same name already exists
             if (this.pendingFiles.some(f => f.name === file.name)) {
-                console.log('[FileUpload] Skipping duplicate:', file.name);
+                console.debug('[FileUpload] Skipping duplicate:', file.name);
                 return;
             }
 
@@ -1640,7 +1641,7 @@ class App {
             const fileType = this.getFileType(file.name);
             const isText = this.isTextFile(file.name);
 
-            console.log('[FileUpload] Processing:', file.name, fileType, file.size, 'bytes');
+            console.debug('[FileUpload] Processing:', file.name, fileType, file.size, 'bytes');
 
             const reader = new FileReader();
 
@@ -1678,7 +1679,7 @@ class App {
                 });
                 this.updateFilePreviews();
                 window.chatManager?.showToast(`File "${file.name}" added`, 'success');
-                console.log('[FileUpload] File added successfully:', file.name);
+                console.debug('[FileUpload] File added successfully:', file.name);
             };
 
             if (isText) {

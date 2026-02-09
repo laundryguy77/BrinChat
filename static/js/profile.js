@@ -31,7 +31,7 @@ class ProfileManager {
 
         // Force reload if requested (e.g., when opening settings modal)
         if (forceReload) {
-            console.log('[Profile] Force reloading profile from server');
+            console.debug('[Profile] Force reloading profile from server');
             await this.loadProfile();
             return;
         }
@@ -40,7 +40,7 @@ class ProfileManager {
         // Profile changes (like unlocking adult mode) update state directly
         if (this.initialized && this.profile) {
             // Just re-render with cached data
-            console.log('[Profile] Using cached profile (adultMode:', this.adultMode, ')');
+            console.debug('[Profile] Using cached profile (adultMode:', this.adultMode, ')');
             this.render();
             return;
         }
@@ -443,11 +443,11 @@ class ProfileManager {
                 // Show toast to confirm unlock is saved immediately
                 this.showToast('Uncensored mode unlocked and saved!', 'success');
                 // Refresh models list to show uncensored models
-                console.log('[Uncensored] window.app exists:', !!window.app);
+                console.debug('[Uncensored] window.app exists:', !!window.app);
                 if (window.app) {
-                    console.log('[Uncensored] Calling window.app.loadModels()');
+                    console.debug('[Uncensored] Calling window.app.loadModels()');
                     await window.app.loadModels();
-                    console.log('[Uncensored] loadModels() completed');
+                    console.debug('[Uncensored] loadModels() completed');
                 }
             } else {
                 const data = await response.json();
@@ -473,11 +473,11 @@ class ProfileManager {
                 this.adultMode = false;
                 this.render();
                 // Refresh models list
-                console.log('[Uncensored] window.app exists:', !!window.app);
+                console.debug('[Uncensored] window.app exists:', !!window.app);
                 if (window.app) {
-                    console.log('[Uncensored] Calling window.app.loadModels()');
+                    console.debug('[Uncensored] Calling window.app.loadModels()');
                     await window.app.loadModels();
-                    console.log('[Uncensored] loadModels() completed');
+                    console.debug('[Uncensored] loadModels() completed');
                 }
             }
         } catch (error) {
@@ -503,7 +503,7 @@ class ProfileManager {
                 this.profile.identity = {};
             }
             this.profile.identity.preferred_name = name || null;
-            console.log('[Profile] Caching preferred_name:', name || '(empty)');
+            console.debug('[Profile] Caching preferred_name:', name || '(empty)');
         }
 
         if (assistantName !== undefined) {
@@ -513,7 +513,7 @@ class ProfileManager {
                 this.profile.persona_preferences = {};
             }
             this.profile.persona_preferences.assistant_name = assistantName || null;
-            console.log('[Profile] Caching assistant_name:', assistantName || '(default)');
+            console.debug('[Profile] Caching assistant_name:', assistantName || '(default)');
         }
 
         if (style) {
@@ -523,7 +523,7 @@ class ProfileManager {
                 this.profile.communication = {};
             }
             this.profile.communication.conversation_style = style;
-            console.log('[Profile] Caching conversation_style:', style);
+            console.debug('[Profile] Caching conversation_style:', style);
         }
 
         if (length) {
@@ -533,7 +533,7 @@ class ProfileManager {
                 this.profile.communication = {};
             }
             this.profile.communication.response_length = length;
-            console.log('[Profile] Caching response_length:', length);
+            console.debug('[Profile] Caching response_length:', length);
         }
 
         if (updates.length === 0) return;
@@ -568,7 +568,6 @@ class ProfileManager {
      */
     getAssistantName() {
         const name = this.profile?.persona_preferences?.assistant_name;
-        console.log('[Profile] getAssistantName() persona_preferences.assistant_name:', name, '-> returning:', name || 'BrinChat');
         return name || 'BrinChat';
     }
 
