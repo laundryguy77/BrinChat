@@ -888,6 +888,13 @@ export class ChatManager {
         }
         this.streamingTTSActive = false;
 
+        // Clear TTS pre-fetch state from previous response.
+        // Without this, chunks from the old response (index 0, 1, 2...)
+        // shadow new chunks with the same indices, causing TTS silence
+        // on second+ responses.
+        this.ttsPreFetchQueue = [];
+        this.ttsFetchedChunks.clear();
+
         // Clear any pending TTS completion promise
         if (this.ttsCompletionResolve) {
             this.ttsCompletionResolve();
@@ -1815,9 +1822,17 @@ export class ChatManager {
             if (!this.streamingAudioPlayer) {
                 const vm = this.app.voiceManager;
                 if (vm) {
+                    // Ensure AudioContext is unlocked and running.
+                    // After first playback completes, some browsers may
+                    // suspend the context; we need it resumed for the new player.
                     await vm.unlockAudio();
                     const ctx = vm._audioCtxForPlayback;
                     if (ctx) {
+                        // Double-check context state — resume if suspended
+                        if (ctx.state === 'suspended') {
+                            console.debug('[Chat] AudioContext was suspended, resuming...');
+                            await ctx.resume();
+                        }
                         this.streamingAudioPlayer = new StreamingAudioPlayer(ctx, () => {
                             // onEnded callback
                             console.debug('[Chat] Streaming TTS playback completed');
