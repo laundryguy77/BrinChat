@@ -178,6 +178,13 @@ class DatabaseService:
             ("011_add_voice_settings", self._migration_011_add_voice_settings),
             ("012_admin_features", self._migration_012_admin_features),
             ("013_add_auto_send_voice", self._migration_013_add_auto_send_voice),
+            ("014_brinboard_projects", self._migration_014_brinboard_projects),
+            ("015_brinboard_agents", self._migration_015_brinboard_agents),
+            ("016_brinboard_tasks", self._migration_016_brinboard_tasks),
+            ("017_brinboard_hooks", self._migration_017_brinboard_hooks),
+            ("018_brinboard_sessions", self._migration_018_brinboard_sessions),
+            ("019_brinboard_attachments_comments", self._migration_019_brinboard_attachments_comments),
+            ("020_brinboard_tags", self._migration_020_brinboard_tags),
         ]
 
         # Run pending migrations
@@ -596,6 +603,168 @@ class DatabaseService:
         self.execute("""
             ALTER TABLE user_settings
             ADD COLUMN auto_send INTEGER DEFAULT 1
+        """)
+
+    def _migration_014_brinboard_projects(self):
+        """Create bb_projects table for BrinBoard"""
+        self.execute("""
+            CREATE TABLE IF NOT EXISTS bb_projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                prompt TEXT DEFAULT '',
+                owner_id INTEGER NOT NULL,
+                settings TEXT DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                archived INTEGER DEFAULT 0,
+                FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+        self.execute("CREATE INDEX IF NOT EXISTS idx_bb_projects_owner ON bb_projects(owner_id)")
+        self.execute("CREATE INDEX IF NOT EXISTS idx_bb_projects_archived ON bb_projects(archived)")
+
+    def _migration_015_brinboard_agents(self):
+        """Create bb_agents table for BrinBoard (before bb_tasks to handle circular FK)"""
+        self.execute("""
+            CREATE TABLE IF NOT EXISTS bb_agents (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                status TEXT DEFAULT 'offline' CHECK(status IN ('idle','active','input_needed','processing','offline')),
+                current_task_id TEXT,
+                health INTEGER DEFAULT 100,
+                last_seen TEXT,
+                metadata TEXT DEFAULT '{}',
+                created_at TEXT NOT NULL
+            )
+        """)
+
+    def _migration_016_brinboard_tasks(self):
+        """Create bb_tasks table for BrinBoard"""
+        self.execute("""
+            CREATE TABLE IF NOT EXISTS bb_tasks (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT,
+                prompt TEXT,
+                project_id TEXT,
+                parent_id TEXT,
+                assignee_id TEXT,
+                status TEXT DEFAULT 'idle' CHECK(status IN ('idle','active','user_input_needed','finished','archived')),
+                priority TEXT DEFAULT 'medium' CHECK(priority IN ('critical','high','medium','low')),
+                position INTEGER DEFAULT 0,
+                settings TEXT DEFAULT '{}',
+                due_date TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (project_id) REFERENCES bb_projects(id) ON DELETE SET NULL,
+                FOREIGN KEY (parent_id) REFERENCES bb_tasks(id) ON DELETE CASCADE,
+                FOREIGN KEY (assignee_id) REFERENCES bb_agents(id) ON DELETE SET NULL
+            )
+        """)
+        self.execute("CREATE INDEX IF NOT EXISTS idx_bb_tasks_project ON bb_tasks(project_id)")
+        self.execute("CREATE INDEX IF NOT EXISTS idx_bb_tasks_status ON bb_tasks(status)")
+        self.execute("CREATE INDEX IF NOT EXISTS idx_bb_tasks_assignee ON bb_tasks(assignee_id)")
+        self.execute("CREATE INDEX IF NOT EXISTS idx_bb_tasks_parent ON bb_tasks(parent_id)")
+
+        # Now add FK constraint to bb_agents.current_task_id (deferred FK)
+        # SQLite doesn't allow adding FKs after table creation, so this is just a logical reference
+
+    def _migration_017_brinboard_hooks(self):
+        """Create bb_hooks table for BrinBoard"""
+        self.execute("""
+            CREATE TABLE IF NOT EXISTS bb_hooks (
+                id TEXT PRIMARY KEY,
+                project_id TEXT,
+                task_id TEXT,
+                name TEXT NOT NULL,
+                description TEXT,
+                event TEXT NOT NULL,
+                action_type TEXT NOT NULL CHECK(action_type IN ('run_prompt','run_script','log_metadata','webhook','block')),
+                action_data TEXT DEFAULT '{}',
+                enabled INTEGER DEFAULT 1,
+                position INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (project_id) REFERENCES bb_projects(id) ON DELETE CASCADE,
+                FOREIGN KEY (task_id) REFERENCES bb_tasks(id) ON DELETE CASCADE,
+                CHECK (project_id IS NOT NULL OR task_id IS NOT NULL)
+            )
+        """)
+        self.execute("CREATE INDEX IF NOT EXISTS idx_bb_hooks_project ON bb_hooks(project_id)")
+        self.execute("CREATE INDEX IF NOT EXISTS idx_bb_hooks_task ON bb_hooks(task_id)")
+
+    def _migration_018_brinboard_sessions(self):
+        """Create bb_agent_sessions table for BrinBoard"""
+        self.execute("""
+            CREATE TABLE IF NOT EXISTS bb_agent_sessions (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                task_id TEXT,
+                project_id TEXT,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                status TEXT DEFAULT 'running' CHECK(status IN ('running','completed','failed','cancelled')),
+                context_size_start INTEGER DEFAULT 0,
+                context_size_end INTEGER,
+                compact_count INTEGER DEFAULT 0,
+                FOREIGN KEY (agent_id) REFERENCES bb_agents(id) ON DELETE CASCADE,
+                FOREIGN KEY (task_id) REFERENCES bb_tasks(id) ON DELETE SET NULL,
+                FOREIGN KEY (project_id) REFERENCES bb_projects(id) ON DELETE SET NULL
+            )
+        """)
+        self.execute("CREATE INDEX IF NOT EXISTS idx_bb_sessions_agent ON bb_agent_sessions(agent_id)")
+
+    def _migration_019_brinboard_attachments_comments(self):
+        """Create bb_attachments and bb_comments tables for BrinBoard"""
+        self.execute("""
+            CREATE TABLE IF NOT EXISTS bb_attachments (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                filepath TEXT NOT NULL,
+                mime_type TEXT,
+                size_bytes INTEGER,
+                uploaded_by INTEGER,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (task_id) REFERENCES bb_tasks(id) ON DELETE CASCADE,
+                FOREIGN KEY (uploaded_by) REFERENCES users(id)
+            )
+        """)
+
+        self.execute("""
+            CREATE TABLE IF NOT EXISTS bb_comments (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                user_id INTEGER,
+                agent_id TEXT,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (task_id) REFERENCES bb_tasks(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                FOREIGN KEY (agent_id) REFERENCES bb_agents(id)
+            )
+        """)
+        self.execute("CREATE INDEX IF NOT EXISTS idx_bb_comments_task ON bb_comments(task_id)")
+
+    def _migration_020_brinboard_tags(self):
+        """Create bb_tags and bb_task_tags tables for BrinBoard"""
+        self.execute("""
+            CREATE TABLE IF NOT EXISTS bb_tags (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                color TEXT DEFAULT '#3b82f6'
+            )
+        """)
+
+        self.execute("""
+            CREATE TABLE IF NOT EXISTS bb_task_tags (
+                task_id TEXT NOT NULL,
+                tag_id TEXT NOT NULL,
+                PRIMARY KEY (task_id, tag_id),
+                FOREIGN KEY (task_id) REFERENCES bb_tasks(id) ON DELETE CASCADE,
+                FOREIGN KEY (tag_id) REFERENCES bb_tags(id) ON DELETE CASCADE
+            )
         """)
 
     def close(self):
