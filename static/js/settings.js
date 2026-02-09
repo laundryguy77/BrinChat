@@ -433,9 +433,6 @@ export class SettingsManager {
             // Initialize knowledge base manager
             knowledgeManager.init();
 
-            // Initialize memory manager
-            memoryManager.init();
-
             // Initialize profile manager with force reload to get latest data
             if (typeof profileManager !== 'undefined') {
                 profileManager.init(true);  // Force reload from server

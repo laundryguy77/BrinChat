@@ -5,11 +5,14 @@ Buffers streaming LLM tokens, detects sentence boundaries, and dispatches
 async TTS requests so audio can start playing before the full response is ready.
 """
 import asyncio
+import datetime
 import logging
 import os
 import re
 import tempfile
+import time
 import uuid
+from pathlib import Path
 from typing import Optional, Tuple
 
 import httpx
@@ -22,6 +25,10 @@ MEDIA_PATTERN = re.compile(r'\n?MEDIA:/?[\w/._ -]+\.(?:mp3|wav|ogg|m4a|opus)\n?'
 # Directory for streaming TTS temp files
 TTS_TEMP_DIR = "/tmp/brinchat-tts"
 os.makedirs(TTS_TEMP_DIR, exist_ok=True)
+
+# Cleanup task control
+_cleanup_task: Optional[asyncio.Task] = None
+_cleanup_stop_event = asyncio.Event()
 
 
 def clean_for_tts(text: str) -> str:
@@ -44,6 +51,74 @@ def clean_for_tts(text: str) -> str:
     if text and not re.search(r'[a-zA-Z0-9]', text):
         return ''
     return text
+
+
+async def cleanup_old_tts_files():
+    """Background task to clean up old TTS temp files."""
+    from app.config import TTS_FILE_MAX_AGE_HOURS, TTS_CLEANUP_INTERVAL_MINUTES
+
+    logger.info(f"[TTS Cleanup] Starting cleanup task (interval: {TTS_CLEANUP_INTERVAL_MINUTES}min, max age: {TTS_FILE_MAX_AGE_HOURS}h)")
+
+    while not _cleanup_stop_event.is_set():
+        try:
+            # Wait for the cleanup interval or stop event
+            try:
+                await asyncio.wait_for(
+                    _cleanup_stop_event.wait(),
+                    timeout=TTS_CLEANUP_INTERVAL_MINUTES * 60
+                )
+                break  # Stop event was set
+            except asyncio.TimeoutError:
+                pass  # Timeout means it's time to clean
+
+            # Perform cleanup
+            now = time.time()
+            max_age_seconds = TTS_FILE_MAX_AGE_HOURS * 3600
+            deleted_count = 0
+            deleted_bytes = 0
+
+            temp_dir = Path(TTS_TEMP_DIR)
+            if not temp_dir.exists():
+                continue
+
+            for file_path in temp_dir.glob("stts-*.wav"):
+                try:
+                    file_age = now - file_path.stat().st_mtime
+                    if file_age > max_age_seconds:
+                        file_size = file_path.stat().st_size
+                        file_path.unlink()
+                        deleted_count += 1
+                        deleted_bytes += file_size
+                except Exception as e:
+                    logger.error(f"[TTS Cleanup] Failed to delete {file_path}: {e}")
+
+            if deleted_count > 0:
+                logger.info(
+                    f"[TTS Cleanup] Deleted {deleted_count} files "
+                    f"({deleted_bytes / 1024 / 1024:.2f} MB) older than {TTS_FILE_MAX_AGE_HOURS}h"
+                )
+
+        except Exception as e:
+            logger.error(f"[TTS Cleanup] Error in cleanup loop: {e}")
+            await asyncio.sleep(60)  # Wait 1 minute before retrying on error
+
+
+def start_cleanup_task():
+    """Start the background cleanup task."""
+    global _cleanup_task
+    if _cleanup_task is None:
+        _cleanup_stop_event.clear()
+        _cleanup_task = asyncio.create_task(cleanup_old_tts_files())
+        logger.info("[TTS Cleanup] Cleanup task started")
+
+
+def stop_cleanup_task():
+    """Stop the background cleanup task."""
+    global _cleanup_task
+    if _cleanup_task is not None:
+        _cleanup_stop_event.set()
+        logger.info("[TTS Cleanup] Cleanup task stopping")
+        _cleanup_task = None
 
 
 def strip_media_from_token(token: str, buffer: list) -> str:
@@ -109,7 +184,7 @@ class SentenceBuffer:
     - Flush remaining buffer when the stream ends
     """
 
-    MIN_SENTENCE_LEN = 30
+    MIN_SENTENCE_LEN = 20  # Lowered from 30 for faster first audio chunk
     MAX_SENTENCE_LEN = 250
 
     # Sentence-ending punctuation followed by whitespace or newline
@@ -207,7 +282,7 @@ async def generate_sentence_audio(
     sentence: str,
     voice: str = "alloy",
     speed: float = 1.0,
-    base_url: str = "http://10.10.10.124:5002",
+    base_url: Optional[str] = None,
 ) -> bytes:
     """
     Generate TTS audio for a single sentence via the OpenAI-compatible endpoint.
@@ -215,6 +290,11 @@ async def generate_sentence_audio(
     Returns:
         WAV audio bytes
     """
+    if base_url is None:
+        raw = os.getenv("OPENAI_TTS_BASE_URL", "")
+        if not raw:
+            raise ValueError("OPENAI_TTS_BASE_URL environment variable is required for TTS")
+        base_url = raw[:-3] if raw.endswith("/v1") else raw
     endpoint = f"{base_url.rstrip('/')}/v1/audio/speech"
 
     payload = {
@@ -224,7 +304,7 @@ async def generate_sentence_audio(
         "speed": speed,
     }
 
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    async with httpx.AsyncClient(timeout=12.0) as client:  # Balanced: allows 8s generation + 4s headroom
         response = await client.post(
             endpoint,
             json=payload,
@@ -255,13 +335,18 @@ async def stream_sentence_tts(
         logger.info(f"[StreamTTS] Sentence #{index} empty after cleaning, skipping")
         return None
 
+    start_time = time.time()
+    success = False
+    is_timeout = False
+
     async with semaphore:
         logger.info(f"[StreamTTS] Generating audio for sentence #{index}: {cleaned[:60]}...")
         try:
             audio_bytes = await generate_sentence_audio(cleaned, voice, speed, base_url)
 
             # Write to temp file instead of base64-encoding for SSE
-            filename = f"stts-{uuid.uuid4().hex[:8]}-{index}.wav"
+            timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            filename = f"stts-{timestamp}-{uuid.uuid4().hex[:6]}-{index}.wav"
             filepath = os.path.join(TTS_TEMP_DIR, filename)
             with open(filepath, 'wb') as f:
                 f.write(audio_bytes)
@@ -269,7 +354,20 @@ async def stream_sentence_tts(
             # URL path that frontend can fetch
             audio_url = f"/api/voice/media/brinchat-tts/{filename}"
             logger.info(f"[StreamTTS] Sentence #{index} done: {len(audio_bytes)} bytes -> {audio_url}")
+            success = True
             return index, audio_url
+        except asyncio.TimeoutError:
+            logger.error(f"[StreamTTS] Sentence #{index} TTS generation timed out")
+            is_timeout = True
+            raise
         except Exception as e:
             logger.error(f"[StreamTTS] Sentence #{index} TTS generation failed: {e}")
             raise
+        finally:
+            # Record metrics
+            latency_ms = (time.time() - start_time) * 1000
+            try:
+                from app.routers.voice import record_tts_request
+                record_tts_request(success, latency_ms, is_timeout)
+            except Exception as e:
+                logger.warning(f"[StreamTTS] Failed to record metrics: {e}")

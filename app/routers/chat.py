@@ -28,10 +28,18 @@ from app.config import (
 from app.models.schemas import ChatRequest
 from app.middleware.auth import require_auth
 from app.models.auth_schemas import UserResponse
+import os
 import uuid
 from pathlib import Path
 
+# TTS base URL from environment (strip /v1 suffix for internal use)
+_tts_url_raw = os.getenv("OPENAI_TTS_BASE_URL", "http://10.10.10.124:5002/v1")
+tts_base_url = _tts_url_raw[:-3] if _tts_url_raw.endswith("/v1") else _tts_url_raw
+
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+# Module-level TTS semaphore: serialize TTS requests to avoid overloading the V100
+_tts_semaphore = asyncio.Semaphore(1)
 
 # Directory for temporary images (OpenClaw image tool can read these)
 TEMP_IMAGE_DIR = Path(__file__).parent.parent.parent / "temp_images"
@@ -343,7 +351,7 @@ async def chat(request: Request, user: UserResponse = Depends(require_auth)):
         tts_chunks_yielded = 0  # Track actual audio delivered to client
         tts_voice = "alloy"
         tts_speed = 1.0
-        tts_base_url = "http://10.10.10.124:5002"
+        # tts_base_url set at module level from OPENAI_TTS_BASE_URL env var
 
         media_token_buffer = []  # Buffer for stripping MEDIA: tags from streamed tokens
 
@@ -351,7 +359,7 @@ async def chat(request: Request, user: UserResponse = Depends(require_auth)):
             from app.services.streaming_tts import SentenceBuffer
             from app.services.voice_settings_service import get_voice_settings_service
             sentence_buffer = SentenceBuffer()
-            tts_semaphore = asyncio.Semaphore(2)  # Max 2 concurrent TTS requests to V100
+            tts_semaphore = _tts_semaphore  # Module-level: serialize TTS to avoid V100 overload
             try:
                 vs_service = get_voice_settings_service()
                 vs = vs_service.get_settings(user.id)
@@ -558,6 +566,8 @@ async def chat(request: Request, user: UserResponse = Depends(require_auth)):
                                     }
                                     tts_chunks_yielded += 1
                                     logger.info(f"[StreamTTS] Yielded tts_chunk #{seq_idx}: {audio_url}")
+                                except asyncio.TimeoutError:
+                                    logger.error(f"[StreamTTS] TTS task timed out")
                                 except Exception as e:
                                     logger.error(f"[StreamTTS] TTS task failed: {e}")
 
@@ -585,6 +595,15 @@ async def chat(request: Request, user: UserResponse = Depends(require_auth)):
                         pass
             except Exception:
                 pass
+
+            # Signal that all text content is done (before TTS flush).
+            # This lets the frontend hide the "Generating..." banner while
+            # TTS audio is still being produced in the background.
+            if voice_response:
+                yield {
+                    "event": "text_done",
+                    "data": json.dumps({"text_complete": True})
+                }
 
             # Streaming TTS: flush remaining buffer and wait for all TTS tasks
             if voice_response and sentence_buffer:

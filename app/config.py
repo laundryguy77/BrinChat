@@ -59,12 +59,12 @@ OPENCLAW_PRIMARY_USER_ID = int(os.getenv("OPENCLAW_PRIMARY_USER_ID", "0"))  # 0 
 OPENCLAW_PRIMARY_USERNAME = os.getenv("OPENCLAW_PRIMARY_USERNAME", "").lower()  # Case-insensitive match
 OPENCLAW_MAIN_SESSION_KEY = os.getenv("OPENCLAW_MAIN_SESSION_KEY", "agent:main:main")
 
-# Nextcloud Deck integration for task extraction (non-primary users)
-NEXTCLOUD_URL = os.getenv("NEXTCLOUD_URL", "http://10.10.10.140:8080")
-NEXTCLOUD_USER = os.getenv("NEXTCLOUD_USER", "admin")
-NEXTCLOUD_PASS = os.getenv("NEXTCLOUD_PASS", "")
-DECK_BOARD_ID = int(os.getenv("DECK_BOARD_ID", "2"))
-DECK_BACKLOG_STACK_ID = int(os.getenv("DECK_BACKLOG_STACK_ID", "5"))
+# Nextcloud Deck integration (DEPRECATED - task extraction service removed)
+# NEXTCLOUD_URL = os.getenv("NEXTCLOUD_URL", "http://10.10.10.140:8080")
+# NEXTCLOUD_USER = os.getenv("NEXTCLOUD_USER", "admin")
+# NEXTCLOUD_PASS = os.getenv("NEXTCLOUD_PASS", "")
+# DECK_BOARD_ID = int(os.getenv("DECK_BOARD_ID", "2"))
+# DECK_BACKLOG_STACK_ID = int(os.getenv("DECK_BACKLOG_STACK_ID", "5"))
 
 # Legacy: Keep OLLAMA_BASE_URL for embedding service (knowledge base still uses Ollama for embeddings)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -72,8 +72,8 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 # Brave Search API
 BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "")
 
-# fal.ai API for image/video generation (Adult Mode)
-FAL_KEY = os.getenv("FAL_KEY", "")
+# fal.ai API (DEPRECATED - not currently used)
+# FAL_KEY = os.getenv("FAL_KEY", "")
 
 # Database settings
 DATABASE_PATH = os.getenv("DATABASE_PATH", "brinchat.db")
@@ -98,6 +98,10 @@ COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
 # Set to comma-separated list of trusted proxy IPs (e.g., "127.0.0.1,10.0.0.1")
 # When set, X-Forwarded-For header from these proxies will be trusted
 TRUSTED_PROXIES = [p.strip() for p in os.getenv("TRUSTED_PROXIES", "").split(",") if p.strip()]
+
+# Image Generation settings
+IMAGE_BACKEND = os.getenv("IMAGE_BACKEND", "gradio")  # "comfyui" or "gradio"
+COMFYUI_API_URL = os.getenv("COMFYUI_API_URL", "http://10.10.10.124:3457")
 
 # Hugging Face settings (for video generation)
 HF_TOKEN = os.getenv("HF_TOKEN", "")
@@ -135,13 +139,24 @@ STT_DEVICE = os.getenv("STT_DEVICE", "cpu")
 VOICE_MAX_AUDIO_LENGTH = int(os.getenv("VOICE_MAX_AUDIO_LENGTH", "60"))  # seconds for STT
 VOICE_MAX_TTS_LENGTH = int(os.getenv("VOICE_MAX_TTS_LENGTH", "5000"))  # characters for TTS
 
-# Feature availability flags (based on API key presence)
+# Feature availability flags (used for startup warnings)
 WEB_SEARCH_AVAILABLE = bool(BRAVE_SEARCH_API_KEY)
 VIDEO_GENERATION_AVAILABLE = bool(HF_TOKEN)
 VOICE_AVAILABLE = VOICE_ENABLED  # Voice requires explicit enablement
 
 # Conversations directory (for JSON file storage)
 CONVERSATIONS_DIR = os.getenv("CONVERSATIONS_DIR", "conversations")
+
+# TTS Configuration
+TTS_TIMEOUT_SECONDS = int(os.getenv("TTS_TIMEOUT_SECONDS", "20"))
+TTS_FILE_MAX_AGE_HOURS = int(os.getenv("TTS_FILE_MAX_AGE_HOURS", "1"))
+TTS_CLEANUP_INTERVAL_MINUTES = int(os.getenv("TTS_CLEANUP_INTERVAL_MINUTES", "5"))
+
+# Validate TTS configuration if voice is enabled
+if VOICE_ENABLED:
+    TTS_BASE_URL = os.getenv("OPENAI_TTS_BASE_URL", "")
+    if not TTS_BASE_URL:
+        logger.warning("VOICE_ENABLED=true but OPENAI_TTS_BASE_URL not set")
 
 class AppSettings(BaseModel):
     persona: Optional[str] = None

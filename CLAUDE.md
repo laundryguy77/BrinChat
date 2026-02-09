@@ -317,6 +317,78 @@ STT_MODEL=small              # tiny, base, small, medium, large
 3. Register in `TTS_BACKENDS` or `STT_BACKENDS` dict
 4. Use via environment variable: `TTS_BACKEND=my_new_backend`
 
+#### Conversation Mode Architecture
+
+Full-duplex voice conversation with parallel processing and interrupt capability.
+
+**Key Improvements (2026-02-09):**
+- **Parallel Processing**: User can speak again while previous response is being processed (~10s between exchanges → ~2s)
+- **Page Visibility Resilience**: Conversation mode streams ignore tab switches (`isConversationMode` flag)
+- **Interrupt Capability**: User can interrupt TTS by speaking (`canInterrupt` flag + `stopCurrentAudio()`)
+- **TTS Completion Tracking**: Promise-based tracking with `StreamingAudioPlayer.onEnded` callback
+- **Message Queue Fix**: `isStreaming` set to `false` on `text_complete` event
+- **AudioContext Reuse**: Reuses `AudioContext` instead of creating new one, tracks and disconnects `audioSourceNode`
+
+**State Flags:**
+```javascript
+// VoiceManager state
+this.isTranscribing = false;        // STT in progress
+this.isWaitingForResponse = false;  // Waiting for backend response
+this.canInterrupt = false;          // True after response starts arriving
+this.audioSourceNode = null;        // Track for cleanup/disconnect
+
+// ChatManager state
+this.isConversationMode = false;    // Set by voice.js
+this.ttsCompletionPromise = null;   // Promise that resolves when TTS completes
+this.ttsCompletionResolve = null;   // Resolver for TTS completion
+this.streamingAudioPlayer = null;   // StreamingAudioPlayer instance
+```
+
+**Flow:**
+```
+1. User speaks → STT transcribes
+2. handleConversationInput() called with transcription:
+   - Shows transcript in overlay
+   - Starts listening immediately (parallel processing)
+   - Sets isWaitingForResponse = true, canInterrupt = false
+   - Sends message via sendMessageAndGetResponse()
+   - Sets canInterrupt = true after send starts
+3. Response streams back:
+   - text_complete event → isStreaming = false (allow new messages)
+   - TTS chunks play via StreamingAudioPlayer
+   - onResponseComplete callback waits for ttsCompletionPromise
+4. TTS completes → StreamingAudioPlayer.onEnded → resolves ttsCompletionPromise
+5. onResponseComplete callback fires → loops back to listening
+```
+
+**Interrupt Handling:**
+- When user starts recording during playback (`canInterrupt = true`):
+  - `startRecording()` detects interrupt condition
+  - Calls `stopCurrentAudio()` to stop StreamingAudioPlayer
+  - Recording continues normally
+- Prevents accidental interrupts during STT processing (`canInterrupt = false`)
+
+**Page Visibility:**
+- `chat.js` checks `isConversationMode` flag before aborting streams on tab switch
+- Conversation mode streams continue in background (no recovery needed)
+- Non-conversation streams abort after 2s hidden (triggers recovery)
+
+**AudioContext Management:**
+- Single `AudioContext` reused across recordings for VAD
+- `audioSourceNode` tracked and disconnected between recordings
+- Prevents memory leaks from accumulated source nodes
+- Lazy initialization: created on first use, persists until cleanup
+
+**Timing Improvements:**
+- Previous: ~10s between exchanges (sequential processing)
+- Current: ~2s between exchanges (parallel processing)
+- User can interrupt TTS immediately by speaking
+- No waiting for response to finish before listening again
+
+**Files:**
+- `/home/brin/projects/BrinChat/static/js/voice.js` - VoiceManager class (lines 889-927: handleConversationInput, 1092-1107: stopCurrentAudio)
+- `/home/brin/projects/BrinChat/static/js/chat.js` - ChatManager integration (lines 1770-1890: TTS completion tracking)
+
 ---
 
 ### Admin System

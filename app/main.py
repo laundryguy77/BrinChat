@@ -189,6 +189,11 @@ async def startup_security_check():
     else:
         logger.info(f"Voice features enabled - TTS: {config.TTS_MODEL}, STT: whisper-{config.STT_MODEL}")
 
+    # Start TTS cleanup task if voice is enabled
+    if config.VOICE_ENABLED:
+        from app.services.streaming_tts import start_cleanup_task
+        start_cleanup_task()
+
 
 @app.on_event("shutdown")
 async def shutdown_cleanup():
@@ -199,5 +204,7 @@ async def shutdown_cleanup():
     if config.VOICE_ENABLED:
         from app.services.tts_service import cleanup_tts_service
         from app.services.stt_service import cleanup_stt_service
+        from app.services.streaming_tts import stop_cleanup_task
         await cleanup_tts_service()
         await cleanup_stt_service()
+        stop_cleanup_task()

@@ -697,10 +697,11 @@ export class ChatManager {
 
         bubbleContainer.appendChild(bubble);
 
-        // Timestamp
+        // Timestamp — use stored timestamp when loading history, current time for new messages
         const timestamp = document.createElement('div');
         timestamp.className = `text-xs text-gray-500 font-medium mt-1 ${isUser ? 'text-right pr-1' : 'pl-1'}`;
-        timestamp.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const msgTime = metadata.timestamp ? new Date(metadata.timestamp) : new Date();
+        timestamp.textContent = msgTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         bubbleContainer.appendChild(timestamp);
 
         // Action buttons
@@ -831,6 +832,7 @@ export class ChatManager {
                     toolsCount: metadata.tools_available?.length || 0
                 });
             }
+            metadata.timestamp = msg.timestamp || null;
             const msgEl = this.createMessageElement(msg.role, msg.content, msg.images || [], msg.id, msg.files, metadata);
             this.messageList.appendChild(msgEl);
         });
@@ -1506,10 +1508,10 @@ export class ChatManager {
             }
 
             // Determine if we want voice response (sentence-level streaming TTS)
-            const wantVoice = this.lastInputWasVoice || (
-                this.app.voiceManager?.settings?.auto_play &&
-                this.app.voiceManager?.canPlayTTS()
-            );
+            // Only request streaming TTS if the user actually used voice input.
+            // auto_play just means "play TTS audio if the server sends it" (e.g. MEDIA: tags),
+            // not "generate TTS for every response".
+            const wantVoice = this.lastInputWasVoice;
 
             const requestBody = {
                 message: text,
