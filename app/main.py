@@ -35,6 +35,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
         return response
 from app.routers import admin, auth, chat, knowledge, models, settings, user_profile, voice
+from app.routers.board import board_router
 from app.services.claude_service import claude_service
 
 logger = logging.getLogger(__name__)
@@ -76,16 +77,7 @@ async def serve_app_js():
     return Response(content, media_type="application/javascript",
                     headers={"Cache-Control": "no-store"})
 
-# Mount static files
-app.mount("/static", StaticFiles(directory=PROJECT_ROOT / "static"), name="static")
-
-# Mount avatars directory for serving generated avatar images
-import os
-avatars_dir = PROJECT_ROOT / "avatars"
-os.makedirs(avatars_dir, exist_ok=True)
-app.mount("/avatars", StaticFiles(directory=avatars_dir), name="avatars")
-
-# Include routers
+# Include routers (BEFORE static mounts)
 app.include_router(admin.router)
 app.include_router(auth.router)
 app.include_router(chat.router)
@@ -94,6 +86,16 @@ app.include_router(models.router)
 app.include_router(settings.router)
 app.include_router(user_profile.router)
 app.include_router(voice.router)
+app.include_router(board_router, prefix="/api/board")
+
+# Mount static files
+app.mount("/static", StaticFiles(directory=PROJECT_ROOT / "static"), name="static")
+
+# Mount avatars directory for serving generated avatar images
+import os
+avatars_dir = PROJECT_ROOT / "avatars"
+os.makedirs(avatars_dir, exist_ok=True)
+app.mount("/avatars", StaticFiles(directory=avatars_dir), name="avatars")
 
 @app.get("/")
 async def index():
