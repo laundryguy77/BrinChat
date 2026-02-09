@@ -1,6 +1,7 @@
 """Voice router for TTS and STT endpoints."""
 import logging
 import json
+import re
 import base64
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
@@ -20,7 +21,86 @@ from app.services.voice_settings_service import (
 
 logger = logging.getLogger(__name__)
 
+# ---- Whisper hallucination filter (server-side safety net) ----
+# Normalized lowercase phrases that Whisper commonly hallucinates on silence/noise
+WHISPER_HALLUCINATIONS = {
+    "thank you.",
+    "thank you",
+    "thanks for watching.",
+    "thanks for watching",
+    "thanks for watching!",
+    "thank you for watching.",
+    "thank you for watching",
+    "thank you for watching!",
+    "subscribe",
+    "please subscribe",
+    "please subscribe.",
+    "like and subscribe",
+    "like and subscribe.",
+    "thanks.",
+    "thanks",
+    "bye.",
+    "bye",
+    "you",
+    "the end.",
+    "the end",
+    "so",
+    "hmm",
+    "uh",
+    "oh",
+}
+
+
+def is_whisper_hallucination(text: str) -> bool:
+    """Check if transcription text is a known Whisper hallucination."""
+    if not text:
+        return True
+    normalized = text.lower().strip()
+    if not normalized:
+        return True
+    # Single punctuation or very short non-word
+    if len(normalized) <= 2 and not re.search(r'[a-z0-9]', normalized):
+        return True
+    if normalized in WHISPER_HALLUCINATIONS:
+        return True
+    # Check without trailing punctuation
+    no_punct = re.sub(r'[.!?,;:]+$', '', normalized).strip()
+    if no_punct and no_punct in WHISPER_HALLUCINATIONS:
+        return True
+    return False
+
 router = APIRouter(prefix="/api/voice", tags=["voice"])
+
+# TTS metrics tracking
+_tts_stats = {
+    "requests_total": 0,
+    "requests_successful": 0,
+    "requests_failed": 0,
+    "requests_timeout": 0,
+    "total_latency_ms": 0,
+    "min_latency_ms": None,
+    "max_latency_ms": None,
+}
+
+
+def record_tts_request(success: bool, latency_ms: float, is_timeout: bool = False):
+    """Record TTS request metrics."""
+    _tts_stats["requests_total"] += 1
+
+    if success:
+        _tts_stats["requests_successful"] += 1
+        _tts_stats["total_latency_ms"] += latency_ms
+
+        if _tts_stats["min_latency_ms"] is None or latency_ms < _tts_stats["min_latency_ms"]:
+            _tts_stats["min_latency_ms"] = latency_ms
+
+        if _tts_stats["max_latency_ms"] is None or latency_ms > _tts_stats["max_latency_ms"]:
+            _tts_stats["max_latency_ms"] = latency_ms
+    else:
+        if is_timeout:
+            _tts_stats["requests_timeout"] += 1
+        else:
+            _tts_stats["requests_failed"] += 1
 
 
 def require_voice_enabled():
@@ -202,7 +282,6 @@ async def transcribe_audio(
     stt_service = get_stt_service()
 
     # Validate language code (simple validation - just alphanumeric and hyphen)
-    import re
     if not re.match(r'^[a-zA-Z]{2,5}(-[a-zA-Z]{2,5})?$|^auto$', language):
         raise HTTPException(status_code=400, detail="Invalid language code")
 
@@ -235,9 +314,21 @@ async def transcribe_audio(
     if result is None:
         raise HTTPException(status_code=500, detail="Transcription failed")
 
+    # Server-side hallucination filter (safety net)
+    transcribed_text = result.get("text", "").strip()
+    if is_whisper_hallucination(transcribed_text):
+        logger.info(f"[STT] Filtered Whisper hallucination: '{transcribed_text}'")
+        return {
+            "success": True,
+            "text": "",  # Return empty — client treats as "no speech detected"
+            "language": result["language"],
+            "segments": [],
+            "filtered": True
+        }
+
     return {
         "success": True,
-        "text": result["text"],
+        "text": transcribed_text,
         "language": result["language"],
         "segments": result.get("segments", [])
     }
@@ -382,4 +473,19 @@ async def voice_status(
         "stt_device": config.STT_DEVICE if config.VOICE_ENABLED else None,
         "max_audio_length": config.VOICE_MAX_AUDIO_LENGTH,
         "max_tts_length": config.VOICE_MAX_TTS_LENGTH
+    }
+
+
+@router.get("/tts-stats")
+async def get_tts_stats(
+    user: UserResponse = Depends(require_auth)
+):
+    """Get TTS performance metrics."""
+    avg_latency = None
+    if _tts_stats["requests_successful"] > 0:
+        avg_latency = _tts_stats["total_latency_ms"] / _tts_stats["requests_successful"]
+
+    return {
+        **_tts_stats,
+        "avg_latency_ms": round(avg_latency, 2) if avg_latency is not None else None,
     }

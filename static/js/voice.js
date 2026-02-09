@@ -34,9 +34,10 @@ export class VoiceManager {
         this.recordingStream = null;
         this.silenceTimer = null;
         this.audioAnalyser = null;
-        this.silenceThreshold = 0.02;   // Slightly higher for better silence detection
-        this.silenceDelay = 1200;       // 1.2s of silence before auto-stop (feels more responsive)
-        
+        this.audioSourceNode = null;    // Track source node for cleanup
+        this.silenceThreshold = 0.13;   // Audio level threshold for silence detection (0-1 scale, raised for noisy environments)
+        this.silenceDelay = 1000;       // 1.0s of silence before auto-stop
+
         // VAD state tracking
         this.hasDetectedSpeech = false;  // Track if we've detected any speech
         this.speechStartTime = null;     // When speech started
@@ -51,8 +52,55 @@ export class VoiceManager {
         this.conversationMode = false;
         this.conversationOverlay = null;
 
+        // Parallel conversation mode state
+        this.isTranscribing = false;
+        this.isWaitingForResponse = false;
+        this.canInterrupt = false;  // True after response starts arriving
+
         // Animation frame for visualizer
         this.animationFrame = null;
+
+        // Anti-hallucination settings
+        this.minAudioDurationMs = 500;  // Reject recordings shorter than 500ms
+        this.minAudioEnergy = 0.005;    // Reject near-silent recordings (RMS energy threshold)
+        this.recordingStartedAt = null; // Timestamp when recording started
+        this.recordingEnergySum = 0;    // Sum of audio energy samples during recording
+        this.recordingEnergySamples = 0; // Number of energy samples taken
+
+        // Known Whisper hallucination phrases (normalized to lowercase, trimmed)
+        this.WHISPER_HALLUCINATIONS = new Set([
+            'thank you.',
+            'thank you',
+            'thanks for watching.',
+            'thanks for watching',
+            'thanks for watching!',
+            'thank you for watching.',
+            'thank you for watching',
+            'thank you for watching!',
+            'subscribe',
+            'please subscribe',
+            'please subscribe.',
+            'like and subscribe',
+            'like and subscribe.',
+            'thanks.',
+            'thanks',
+            'bye.',
+            'bye',
+            'you',
+            'the end.',
+            'the end',
+            'so',
+            'hmm',
+            'uh',
+            'oh',
+        ]);
+
+        // Streaming STT settings (experimental)
+        this.useStreamingSTT = false;  // Toggle for experimental streaming mode
+        this.streamingWS = null;
+        this.streamingBuffer = '';
+        this.streamingProcessor = null;
+        this.streamingAudioContext = null;
 
         this.init();
     }
@@ -120,13 +168,24 @@ export class VoiceManager {
                 <!-- Transcription preview -->
                 <div id="voice-transcript" class="text-gray-300 text-lg max-w-md mx-auto min-h-[60px]"></div>
                 
-                <!-- Exit button -->
-                <button id="exit-conversation-mode" class="mt-8 px-6 py-3 bg-red-500/20 hover:bg-red-500/30 border border-red-500/50 rounded-full text-red-400 transition-colors">
-                    <span class="flex items-center gap-2">
-                        <span class="material-symbols-outlined">close</span>
-                        End Conversation
-                    </span>
-                </button>
+                <!-- Action buttons -->
+                <div class="flex gap-4 mt-8">
+                    <!-- Manual send button (tap to send current recording immediately) -->
+                    <button id="send-voice-now" class="hidden px-6 py-3 bg-primary/20 hover:bg-primary/30 border border-primary/50 rounded-full text-primary transition-colors">
+                        <span class="flex items-center gap-2">
+                            <span class="material-symbols-outlined">send</span>
+                            Send Now
+                        </span>
+                    </button>
+                    
+                    <!-- Exit button -->
+                    <button id="exit-conversation-mode" class="px-6 py-3 bg-red-500/20 hover:bg-red-500/30 border border-red-500/50 rounded-full text-red-400 transition-colors">
+                        <span class="flex items-center gap-2">
+                            <span class="material-symbols-outlined">close</span>
+                            End Conversation
+                        </span>
+                    </button>
+                </div>
             </div>
         `;
         document.body.appendChild(overlay);
@@ -170,6 +229,17 @@ export class VoiceManager {
             });
             micBtn.addEventListener('mouseup', () => clearTimeout(pressTimer));
             micBtn.addEventListener('mouseleave', () => clearTimeout(pressTimer));
+        }
+
+        // Send voice now button (manual send in conversation mode)
+        const sendVoiceBtn = document.getElementById('send-voice-now');
+        if (sendVoiceBtn) {
+            sendVoiceBtn.addEventListener('click', () => {
+                if (this.conversationMode && this.isRecording) {
+                    console.debug('[Voice] Manual send triggered');
+                    this.stopRecording();
+                }
+            });
         }
 
         // Exit conversation mode button
@@ -239,12 +309,51 @@ export class VoiceManager {
                 }
             });
 
+            // Check if user interrupted response
+            if (this.conversationMode && this.canInterrupt) {
+                console.log('[Voice] User interrupted response - stopping TTS');
+                this.stopCurrentAudio();
+            }
+
+            // Check if using streaming mode (experimental)
+            if (this.useStreamingSTT) {
+                console.log('[Voice] Using streaming STT mode');
+                await this.startStreamingSTT();
+                this.isRecording = true;
+                this.updateRecordingUI(true);
+
+                // Update voice button aria state
+                const micBtn = document.getElementById('voice-input-btn');
+                if (micBtn) micBtn.setAttribute('aria-pressed', 'true');
+                this.announceToScreenReader('Recording started with streaming transcription.');
+                return;
+            }
+
+            // Original batch mode
             // Set up audio analyser for silence detection
-            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const source = this.audioContext.createMediaStreamSource(this.recordingStream);
+
+            // Disconnect previous source node if exists
+            if (this.audioSourceNode) {
+                try {
+                    this.audioSourceNode.disconnect();
+                    console.debug('[Voice] Disconnected previous audio source node');
+                } catch (e) {
+                    // Already disconnected, ignore
+                }
+            }
+
+            // Reuse AudioContext if it exists, create new one if needed
+            if (!this.audioContext || this.audioContext.state === 'closed') {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                console.debug('[Voice] Created new AudioContext for VAD');
+            } else {
+                console.debug('[Voice] Reusing existing AudioContext for VAD');
+            }
+
+            this.audioSourceNode = this.audioContext.createMediaStreamSource(this.recordingStream);
             this.audioAnalyser = this.audioContext.createAnalyser();
             this.audioAnalyser.fftSize = 256;
-            source.connect(this.audioAnalyser);
+            this.audioSourceNode.connect(this.audioAnalyser);
 
             // Start recording
             this.audioChunks = [];
@@ -262,15 +371,18 @@ export class VoiceManager {
 
             this.mediaRecorder.start(100);
             this.isRecording = true;
+            this.recordingStartedAt = Date.now();
+            this.recordingEnergySum = 0;
+            this.recordingEnergySamples = 0;
             this.updateRecordingUI(true);
             this.startSilenceDetection();
-            
+
             // Update voice button aria state and announce to screen readers
             const micBtn = document.getElementById('voice-input-btn');
             if (micBtn) micBtn.setAttribute('aria-pressed', 'true');
             this.announceToScreenReader('Recording started. Click again or wait for silence to stop.');
 
-            console.log('[Voice] Recording started');
+            console.debug('[Voice] Recording started');
         } catch (error) {
             console.error('[Voice] Microphone access denied:', error);
             this.showToast('Microphone access denied. Please allow microphone access.', 'error');
@@ -278,7 +390,30 @@ export class VoiceManager {
     }
 
     async stopRecording() {
-        if (!this.mediaRecorder || !this.isRecording) return;
+        if (!this.isRecording) return;
+
+        // Handle streaming mode
+        if (this.useStreamingSTT && this.streamingWS) {
+            this.stopStreamingSTT();
+            this.isRecording = false;
+
+            if (this.recordingStream) {
+                this.recordingStream.getTracks().forEach(t => t.stop());
+                this.recordingStream = null;
+            }
+
+            this.updateRecordingUI(false);
+
+            // Update voice button aria state
+            const micBtn = document.getElementById('voice-input-btn');
+            if (micBtn) micBtn.setAttribute('aria-pressed', 'false');
+
+            console.debug('[Voice] Streaming recording stopped');
+            return;
+        }
+
+        // Original batch mode
+        if (!this.mediaRecorder) return;
 
         this.stopSilenceDetection();
         this.mediaRecorder.stop();
@@ -289,60 +424,95 @@ export class VoiceManager {
             this.recordingStream = null;
         }
 
+        // Disconnect audio source node (but keep AudioContext for reuse)
+        if (this.audioSourceNode) {
+            try {
+                this.audioSourceNode.disconnect();
+                this.audioSourceNode = null;
+            } catch (e) {
+                // Already disconnected, ignore
+            }
+        }
+
         this.updateRecordingUI(false);
-        
+
         // Update voice button aria state
         const micBtn = document.getElementById('voice-input-btn');
         if (micBtn) micBtn.setAttribute('aria-pressed', 'false');
-        
-        console.log('[Voice] Recording stopped');
+
+        console.debug('[Voice] Recording stopped');
     }
 
     startSilenceDetection() {
         const bufferLength = this.audioAnalyser.frequencyBinCount;
         const dataArray = new Uint8Array(bufferLength);
         let silenceStart = null;
-        
+        let lastLogTime = 0;
+
         // Reset speech detection state
         this.hasDetectedSpeech = false;
         this.speechStartTime = Date.now();
 
+        console.log(`[Voice VAD] Starting silence detection - threshold: ${this.silenceThreshold}, delay: ${this.silenceDelay}ms`);
+
         const checkSilence = () => {
-            if (!this.isRecording) return;
+            if (!this.isRecording) {
+                console.debug('[Voice VAD] Stopping - not recording');
+                return;
+            }
 
-            this.audioAnalyser.getByteFrequencyData(dataArray);
-            const average = dataArray.reduce((a, b) => a + b) / bufferLength / 255;
+            try {
+                this.audioAnalyser.getByteFrequencyData(dataArray);
+                const average = dataArray.reduce((a, b) => a + b) / bufferLength / 255;
 
-            // Speech detection threshold - slightly lower than silence threshold
-            const speechThreshold = this.silenceThreshold * 0.8;
+                // Track energy for hallucination rejection
+                this.recordingEnergySum += average;
+                this.recordingEnergySamples++;
 
-            if (average >= speechThreshold) {
-                // Detected speech
-                if (!this.hasDetectedSpeech) {
-                    this.hasDetectedSpeech = true;
-                    console.log('[Voice] Speech detected');
+                // Log audio levels every 2 seconds for debugging
+                const now = Date.now();
+                if (now - lastLogTime > 2000) {
+                    console.debug(`[Voice VAD] Audio level: ${average.toFixed(4)} (threshold: ${this.silenceThreshold}, speech detected: ${this.hasDetectedSpeech})`);
+                    lastLogTime = now;
                 }
-                silenceStart = null;  // Reset silence timer when speaking
-            } else if (average < this.silenceThreshold) {
-                // Silence detected
-                if (!silenceStart) {
-                    silenceStart = Date.now();
-                } else {
-                    const silenceDuration = Date.now() - silenceStart;
-                    const recordingDuration = Date.now() - this.speechStartTime;
-                    
-                    // Only auto-stop if:
-                    // 1. We've detected speech at some point
-                    // 2. We've recorded for at least minRecordingTime
-                    // 3. Silence has lasted for silenceDelay
-                    if (this.hasDetectedSpeech && 
-                        recordingDuration > this.minRecordingTime && 
-                        silenceDuration > this.silenceDelay) {
-                        console.log(`[Voice] Auto-stopping: speech detected, ${silenceDuration}ms silence after ${recordingDuration}ms recording`);
-                        this.stopRecording();
-                        return;
+
+                // Speech detection threshold - slightly lower than silence threshold
+                const speechThreshold = this.silenceThreshold * 0.8;
+
+                if (average >= speechThreshold) {
+                    // Detected speech
+                    if (!this.hasDetectedSpeech) {
+                        this.hasDetectedSpeech = true;
+                        console.debug('[Voice VAD] Speech detected!');
+                    }
+                    silenceStart = null;  // Reset silence timer when speaking
+                } else if (average < this.silenceThreshold) {
+                    // Silence detected
+                    if (!silenceStart) {
+                        silenceStart = Date.now();
+                        if (this.hasDetectedSpeech) {
+                            console.debug('[Voice VAD] Silence started');
+                        }
+                    } else {
+                        const silenceDuration = Date.now() - silenceStart;
+                        const recordingDuration = Date.now() - this.speechStartTime;
+
+                        // Only auto-stop if:
+                        // 1. We've detected speech at some point
+                        // 2. We've recorded for at least minRecordingTime
+                        // 3. Silence has lasted for silenceDelay
+                        if (this.hasDetectedSpeech &&
+                            recordingDuration > this.minRecordingTime &&
+                            silenceDuration > this.silenceDelay) {
+                            console.debug(`[Voice VAD] Auto-stopping: speech detected, ${silenceDuration}ms silence after ${recordingDuration}ms recording`);
+                            this.stopRecording();
+                            return;
+                        }
                     }
                 }
+            } catch (error) {
+                console.error('[Voice VAD] Error in checkSilence loop:', error);
+                // Continue anyway
             }
 
             this.animationFrame = requestAnimationFrame(checkSilence);
@@ -358,11 +528,72 @@ export class VoiceManager {
         }
     }
 
+    /**
+     * Check if a transcription is a known Whisper hallucination.
+     * @param {string} text - The transcribed text
+     * @returns {boolean} True if the text is a hallucination
+     */
+    isWhisperHallucination(text) {
+        if (!text) return true;
+        const normalized = text.toLowerCase().trim();
+
+        // Empty or whitespace-only
+        if (!normalized) return true;
+
+        // Single punctuation mark or very short non-word
+        if (normalized.length <= 2 && !/[a-z0-9]/i.test(normalized)) return true;
+
+        // Check against known hallucination phrases
+        if (this.WHISPER_HALLUCINATIONS.has(normalized)) {
+            console.debug(`[Voice] Filtered Whisper hallucination: "${text}"`);
+            return true;
+        }
+
+        // Also check without trailing punctuation
+        const noPunct = normalized.replace(/[.!?,;:]+$/, '').trim();
+        if (noPunct && this.WHISPER_HALLUCINATIONS.has(noPunct)) {
+            console.debug(`[Voice] Filtered Whisper hallucination (depunct): "${text}"`);
+            return true;
+        }
+
+        return false;
+    }
+
     async processRecording() {
         if (this.audioChunks.length === 0) return;
 
         const audioBlob = new Blob(this.audioChunks, { type: this.getSupportedMimeType() });
         this.audioChunks = [];
+
+        // --- Anti-hallucination checks (before sending to server) ---
+
+        // 1. Minimum duration check
+        const recordingDuration = this.recordingStartedAt ? Date.now() - this.recordingStartedAt : 0;
+        if (recordingDuration < this.minAudioDurationMs) {
+            console.debug(`[Voice] Recording too short (${recordingDuration}ms < ${this.minAudioDurationMs}ms), discarding`);
+            this.updateRecordingUI(false, false);
+            if (this.conversationMode) {
+                // Silently restart listening in conversation mode
+                this.startConversationListening();
+            }
+            return;
+        }
+
+        // 2. Audio energy check — reject near-silent recordings
+        const avgEnergy = this.recordingEnergySamples > 0
+            ? this.recordingEnergySum / this.recordingEnergySamples
+            : 0;
+        if (avgEnergy < this.minAudioEnergy) {
+            console.debug(`[Voice] Recording too quiet (avgEnergy=${avgEnergy.toFixed(5)} < ${this.minAudioEnergy}), discarding`);
+            this.updateRecordingUI(false, false);
+            if (this.conversationMode) {
+                // Silently restart listening in conversation mode
+                this.startConversationListening();
+            }
+            return;
+        }
+
+        console.debug(`[Voice] Recording passed pre-checks: duration=${recordingDuration}ms, avgEnergy=${avgEnergy.toFixed(5)}`);
 
         // Show processing state
         this.updateRecordingUI(false, true);
@@ -397,20 +628,36 @@ export class VoiceManager {
                 const result = await response.json();
                 const text = result.text?.trim();
 
+                // 3. Post-transcription hallucination filter
+                if (text && this.isWhisperHallucination(text)) {
+                    console.debug(`[Voice] Whisper hallucination filtered: "${text}"`);
+                    this.updateRecordingUI(false, false);
+                    if (this.conversationMode) {
+                        // Silently restart listening — don't show error toast
+                        this.startConversationListening();
+                    }
+                    return;
+                }
+
                 if (text) {
                     if (this.conversationMode) {
                         // Mode 2: Auto-send in conversation mode
                         await this.handleConversationInput(text);
                     } else if (this.settings.auto_send) {
                         // Voice Assistant Mode: Auto-send transcription immediately
-                        console.log('[Voice] Auto-sending transcription:', text);
+                        console.debug('[Voice] Auto-sending transcription:', text);
                         await this.autoSendTranscription(text);
                     } else {
                         // Legacy Mode: Insert into text input for manual editing/sending
                         this.insertTranscribedText(text);
                     }
                 } else {
-                    this.showToast('No speech detected. Try speaking closer to the microphone.', 'warning');
+                    if (!this.conversationMode) {
+                        this.showToast('No speech detected. Try speaking closer to the microphone.', 'warning');
+                    } else {
+                        // In conversation mode, silently restart
+                        this.startConversationListening();
+                    }
                 }
 
                 // Success - exit retry loop
@@ -458,7 +705,7 @@ export class VoiceManager {
 
         // Check if chat is currently streaming (don't interrupt)
         if (this.app.chatManager.isStreaming) {
-            console.log('[Voice] Chat is streaming, inserting text instead');
+            console.debug('[Voice] Chat is streaming, inserting text instead');
             this.insertTranscribedText(text);
             return;
         }
@@ -469,7 +716,7 @@ export class VoiceManager {
         // Send the message directly
         try {
             await this.app.chatManager.sendMessage(text, [], [], false, []);
-            console.log('[Voice] Message sent successfully');
+            console.debug('[Voice] Message sent successfully');
         } catch (error) {
             console.error('[Voice] Failed to send message:', error);
             // Fallback: insert into input field
@@ -493,7 +740,124 @@ export class VoiceManager {
         // Move cursor to end
         input.setSelectionRange(input.value.length, input.value.length);
         
-        console.log('[Voice] Inserted transcription:', text);
+        console.debug('[Voice] Inserted transcription:', text);
+    }
+
+    // ==================== Streaming STT (Experimental) ====================
+
+    async startStreamingSTT() {
+        if (this.streamingWS) return;
+
+        console.debug('[Voice] Starting streaming STT');
+
+        // Connect to Whisper WebSocket
+        try {
+            this.streamingWS = new WebSocket('ws://10.10.10.124:5001/ws/transcribe');
+        } catch (error) {
+            console.error('[Voice] Failed to create WebSocket:', error);
+            this.showToast('Streaming STT connection failed', 'error');
+            return;
+        }
+
+        this.streamingWS.onopen = async () => {
+            console.debug('[Voice] Streaming STT connected');
+
+            // Create AudioContext for PCM conversion (16kHz for Whisper)
+            this.streamingAudioContext = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: 16000
+            });
+            const source = this.streamingAudioContext.createMediaStreamSource(this.recordingStream);
+
+            // Use ScriptProcessor to extract PCM (deprecated but widely supported)
+            // TODO: Migrate to AudioWorklet for better performance
+            this.streamingProcessor = this.streamingAudioContext.createScriptProcessor(4096, 1, 1);
+
+            this.streamingProcessor.onaudioprocess = (e) => {
+                if (!this.streamingWS || this.streamingWS.readyState !== WebSocket.OPEN) {
+                    return;
+                }
+
+                // Convert float32 audio to int16 PCM
+                const audioData = e.inputBuffer.getChannelData(0);
+                const pcm16 = new Int16Array(audioData.length);
+                for (let i = 0; i < audioData.length; i++) {
+                    pcm16[i] = Math.max(-32768, Math.min(32767, audioData[i] * 32768));
+                }
+
+                // Send PCM chunk to server
+                this.streamingWS.send(pcm16.buffer);
+            };
+
+            source.connect(this.streamingProcessor);
+            this.streamingProcessor.connect(this.streamingAudioContext.destination);
+        };
+
+        this.streamingWS.onmessage = (event) => {
+            const result = JSON.parse(event.data);
+
+            if (result.type === 'partial') {
+                // Show interim transcription
+                this.showInterimTranscript(result.text);
+            } else if (result.type === 'final') {
+                // Use final transcription
+                this.streamingBuffer = result.text;
+                this.handleTranscription(result.text);
+            }
+        };
+
+        this.streamingWS.onerror = (error) => {
+            console.error('[Voice] Streaming STT error:', error);
+            this.showToast('Streaming transcription error', 'error');
+        };
+
+        this.streamingWS.onclose = () => {
+            console.debug('[Voice] Streaming STT disconnected');
+            this.cleanupStreaming();
+        };
+    }
+
+    stopStreamingSTT() {
+        if (this.streamingWS) {
+            try {
+                this.streamingWS.send('stop');
+            } catch (error) {
+                console.warn('[Voice] Error sending stop signal:', error);
+            }
+            this.streamingWS.close();
+            this.cleanupStreaming();
+        }
+    }
+
+    cleanupStreaming() {
+        if (this.streamingProcessor) {
+            this.streamingProcessor.disconnect();
+            this.streamingProcessor = null;
+        }
+        if (this.streamingAudioContext) {
+            this.streamingAudioContext.close();
+            this.streamingAudioContext = null;
+        }
+        this.streamingWS = null;
+    }
+
+    showInterimTranscript(text) {
+        // Display partial transcription in conversation overlay
+        const transcript = document.getElementById('voice-transcript');
+        if (transcript && this.conversationMode) {
+            transcript.textContent = text;
+            transcript.style.fontStyle = 'italic';  // Visual indicator it's interim
+        }
+    }
+
+    handleTranscription(text) {
+        // Handle final transcription based on mode
+        if (this.conversationMode) {
+            this.handleConversationInput(text);
+        } else if (this.settings.auto_send) {
+            this.autoSendTranscription(text);
+        } else {
+            this.insertTranscribedText(text);
+        }
     }
 
     updateRecordingUI(isRecording, isProcessing = false) {
@@ -536,9 +900,18 @@ export class VoiceManager {
         }
 
         console.log('[Voice] Entering conversation mode');
+
+        // Unlock AudioContext for playback (must be called from user gesture)
+        await this.unlockAudio();
+
         this.conversationMode = true;
         this.conversationOverlay.classList.remove('hidden');
         document.body.style.overflow = 'hidden';
+
+        // Notify chat manager
+        if (this.app.chatManager) {
+            this.app.chatManager.setConversationMode(true);
+        }
 
         // Start listening
         await this.startConversationListening();
@@ -547,16 +920,53 @@ export class VoiceManager {
     async exitConversationMode() {
         console.log('[Voice] Exiting conversation mode');
         this.conversationMode = false;
-        
+
+        // Clear all parallel processing state flags
+        this.isTranscribing = false;
+        this.isWaitingForResponse = false;
+        this.canInterrupt = false;
+
+        // Notify chat manager
+        if (this.app.chatManager) {
+            this.app.chatManager.setConversationMode(false);
+        }
+
+        // Discard any audio chunks (don't send partial recordings)
+        this.audioChunks = [];
+
         // Stop any active recording or playback
-        await this.stopRecording();
+        if (this.mediaRecorder && this.isRecording) {
+            this.stopSilenceDetection();
+            this.isRecording = false;
+
+            // Stop the recorder without triggering onstop handler
+            this.mediaRecorder.onstop = null;
+            this.mediaRecorder.stop();
+
+            if (this.recordingStream) {
+                this.recordingStream.getTracks().forEach(t => t.stop());
+                this.recordingStream = null;
+            }
+
+            // Disconnect audio source node
+            if (this.audioSourceNode) {
+                try {
+                    this.audioSourceNode.disconnect();
+                    this.audioSourceNode = null;
+                } catch (e) {
+                    // Already disconnected, ignore
+                }
+            }
+        }
+
         this.stopPlayback();
-        
+
         this.conversationOverlay.classList.add('hidden');
         document.body.style.overflow = '';
-        
+
         // Reset overlay state
         this.setConversationState('idle');
+        this.updateRecordingUI(false);
     }
 
     setConversationState(state) {
@@ -564,21 +974,26 @@ export class VoiceManager {
         const processing = document.getElementById('voice-processing');
         const speaking = document.getElementById('voice-speaking');
         const transcript = document.getElementById('voice-transcript');
+        const sendVoiceBtn = document.getElementById('send-voice-now');
 
         [listening, processing, speaking].forEach(el => el?.classList.add('hidden'));
 
         switch (state) {
             case 'listening':
                 listening?.classList.remove('hidden');
+                if (sendVoiceBtn) sendVoiceBtn.classList.remove('hidden');
                 break;
             case 'processing':
                 processing?.classList.remove('hidden');
+                if (sendVoiceBtn) sendVoiceBtn.classList.add('hidden');
                 break;
             case 'speaking':
                 speaking?.classList.remove('hidden');
+                if (sendVoiceBtn) sendVoiceBtn.classList.add('hidden');
                 break;
             case 'idle':
                 if (transcript) transcript.textContent = '';
+                if (sendVoiceBtn) sendVoiceBtn.classList.add('hidden');
                 break;
         }
     }
@@ -591,7 +1006,9 @@ export class VoiceManager {
     }
 
     async handleConversationInput(text) {
-        if (!this.conversationMode) return;
+        if (!text || !this.conversationMode) return;
+
+        console.debug('[Voice] Processing input in parallel with listening');
 
         // Show transcript
         const transcript = document.getElementById('voice-transcript');
@@ -601,22 +1018,30 @@ export class VoiceManager {
 
         this.setConversationState('processing');
 
+        // Start listening immediately (don't await - parallel processing)
+        this.startConversationListening();
+
+        // Process transcription in background
+        this.isWaitingForResponse = true;
+        this.canInterrupt = false;
+
         try {
-            // Send to chat and get response
-            const response = await this.sendMessageAndGetResponse(text);
-            
-            if (response && this.conversationMode) {
-                this.setConversationState('speaking');
-                await this.speakText(response, true);
-            }
+            // Send message (non-blocking from listening perspective)
+            await this.sendMessageAndGetResponse(text);
+
+            // Response is streaming now, allow interrupts
+            this.canInterrupt = true;
+
         } catch (error) {
             console.error('[Voice] Conversation error:', error);
-            this.showToast('Error processing message', 'error');
-        }
+            this.showToast('Conversation interrupted. Listening again.', 'warning');
 
-        // Continue listening if still in conversation mode
-        if (this.conversationMode) {
-            await this.startConversationListening();
+            // Always recover - restart listening if not already
+            if (!this.isRecording) {
+                await this.startConversationListening();
+            }
+        } finally {
+            this.isWaitingForResponse = false;
         }
     }
 
@@ -629,39 +1054,35 @@ export class VoiceManager {
             this.app.chatManager.onResponseComplete = (responseText) => {
                 resolve(responseText);
             };
-            
+
             // Mark this as voice input so response will auto-speak
             this.app.chatManager.setVoiceInput(true);
-            
-            // Send the message
-            const input = document.getElementById('message-input');
-            if (input) {
-                input.value = text;
-                this.app.chatManager.sendMessage();
-            }
+
+            // Send the message directly with the text parameter
+            this.app.chatManager.sendMessage(text);
         });
     }
 
     // ==================== TTS Playback ====================
 
     async speakText(text, force = false) {
-        console.log('[Voice] speakText called - force:', force, 'canPlayTTS:', this.canPlayTTS(), 'voice_enabled:', this.settings.voice_enabled, 'voice_mode:', this.settings.voice_mode, 'auto_play:', this.settings.auto_play);
+        console.debug('[Voice] speakText called - force:', force, 'canPlayTTS:', this.canPlayTTS(), 'voice_enabled:', this.settings.voice_enabled, 'voice_mode:', this.settings.voice_mode, 'auto_play:', this.settings.auto_play);
         
         // Check if TTS is enabled
         if (!force && !this.canPlayTTS()) {
-            console.log('[Voice] Skipped - not forced and canPlayTTS=false');
+            console.debug('[Voice] Skipped - not forced and canPlayTTS=false');
             return;
         }
 
         if (!this.settings.voice_enabled) {
-            console.log('[Voice] Voice not enabled on server - trying to reload settings...');
+            console.debug('[Voice] Voice not enabled on server - trying to reload settings...');
             // Settings might not have loaded yet - try reloading
             await this.loadSettings();
             if (!this.settings.voice_enabled) {
-                console.log('[Voice] Voice still not enabled after reload. Aborting.');
+                console.debug('[Voice] Voice still not enabled after reload. Aborting.');
                 return;
             }
-            console.log('[Voice] Settings reloaded successfully, voice_enabled:', this.settings.voice_enabled);
+            console.debug('[Voice] Settings reloaded successfully, voice_enabled:', this.settings.voice_enabled);
         }
 
         const cleanText = this.cleanTextForTTS(text);
@@ -670,7 +1091,7 @@ export class VoiceManager {
             return;
         }
 
-        console.log('[Voice] Speaking:', cleanText.substring(0, 50) + '...');
+        console.debug('[Voice] Speaking:', cleanText.substring(0, 50) + '...');
         
         // Ensure audio context is unlocked
         await this.unlockAudio();
@@ -731,7 +1152,7 @@ export class VoiceManager {
         }
         if (this._audioCtxForPlayback.state === 'suspended') {
             await this._audioCtxForPlayback.resume();
-            console.log('[Voice] AudioContext unlocked for autoplay');
+            console.debug('[Voice] AudioContext unlocked for autoplay');
         }
     }
 
@@ -765,7 +1186,7 @@ export class VoiceManager {
             };
 
             this.currentAudio.play().then(() => {
-                console.log('[Voice] Audio playback started successfully');
+                console.debug('[Voice] Audio playback started successfully');
             }).catch((err) => {
                 console.error('[Voice] Audio.play() rejected:', err.name, err.message);
                 this.isPlaying = false;
@@ -787,6 +1208,23 @@ export class VoiceManager {
         this.isPlaying = false;
     }
 
+    stopCurrentAudio() {
+        // Stop streaming audio player
+        if (this.app.chatManager && this.app.chatManager.streamingAudioPlayer) {
+            this.app.chatManager.streamingAudioPlayer.stop();
+            this.app.chatManager.streamingAudioPlayer = null;
+        }
+
+        // Stop regular audio
+        if (this.currentAudio) {
+            this.currentAudio.pause();
+            this.currentAudio = null;
+        }
+
+        this.isPlaying = false;
+        console.log('[Voice] Audio interrupted by user');
+    }
+
     canPlayTTS() {
         return this.settings.voice_enabled && 
             (this.settings.voice_mode === 'tts_only' || 
@@ -794,6 +1232,10 @@ export class VoiceManager {
     }
 
     cleanTextForTTS(text) {
+        // Remove <details> blocks (collapsible sections are visual-only)
+        text = text.replace(/<details[\s\S]*?<\/details>/gi, '');
+        // Remove HTML tags that might remain
+        text = text.replace(/<[^>]+>/g, '');
         // Remove code blocks
         text = text.replace(/```[\s\S]*?```/g, 'code block');
         // Remove inline code
@@ -804,6 +1246,10 @@ export class VoiceManager {
         text = text.replace(/[*_~]+/g, '');
         // Remove headers
         text = text.replace(/^#+\s*/gm, '');
+        // Remove markdown tables
+        text = text.replace(/^\|.*\|$/gm, '');
+        // Remove horizontal rules
+        text = text.replace(/^---+$/gm, '');
         // Collapse whitespace
         text = text.replace(/\s+/g, ' ');
         return text.trim();
@@ -867,7 +1313,7 @@ export class VoiceManager {
  * no micro-gaps between sentences.
  */
 export class StreamingAudioPlayer {
-    constructor(audioContext) {
+    constructor(audioContext, onEnded = null) {
         this.ctx = audioContext;
         this.queue = [];          // { index, buffer } sorted by index
         this.nextIndex = 0;       // next index we expect to play
@@ -875,6 +1321,7 @@ export class StreamingAudioPlayer {
         this.playing = false;
         this.done = false;        // true once tts_done received
         this.activeNodes = [];
+        this.onEnded = onEnded;   // Callback when all playback completes
     }
 
     /**
@@ -887,7 +1334,7 @@ export class StreamingAudioPlayer {
             const buffer = await this.ctx.decodeAudioData(audioData);
             this.queue.push({ index, buffer });
             this.queue.sort((a, b) => a.index - b.index);
-            console.log(`[StreamPlayer] Enqueued chunk #${index} (${buffer.duration.toFixed(2)}s)`);
+            console.debug(`[StreamPlayer] Enqueued chunk #${index} (${buffer.duration.toFixed(2)}s)`);
             this._scheduleNext();
         } catch (err) {
             console.error(`[StreamPlayer] Failed to decode chunk #${index}:`, err);
@@ -899,7 +1346,7 @@ export class StreamingAudioPlayer {
      */
     markDone() {
         this.done = true;
-        console.log('[StreamPlayer] All chunks received');
+        console.debug('[StreamPlayer] All chunks received');
     }
 
     /**
@@ -941,7 +1388,12 @@ export class StreamingAudioPlayer {
                 // If all nodes finished and no more chunks coming, we're done
                 if (this.activeNodes.length === 0 && (this.done || this.queue.length === 0)) {
                     this.playing = false;
-                    console.log('[StreamPlayer] Playback complete');
+                    console.debug('[StreamPlayer] Playback complete');
+
+                    // Call onEnded callback if provided
+                    if (this.onEnded) {
+                        this.onEnded();
+                    }
                 }
             };
         }
